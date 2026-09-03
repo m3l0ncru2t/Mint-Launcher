@@ -1,8 +1,11 @@
 use crate::instance::{self, Instance, ModLoader};
 use crate::mod_meta;
 use crate::state::AppState;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use tauri::State;
+
+const MAX_ICON_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +24,18 @@ fn resolve_instance(state: &AppState, id: &str) -> Result<Instance, String> {
 
 fn resolve_mods_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
     Ok(resolve_instance(state, id)?.mods_dir(&state.instances_dir()))
+}
+
+fn resolve_resourcepacks_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
+    Ok(resolve_instance(state, id)?.resourcepacks_dir(&state.instances_dir()))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePackFile {
+    pub file_name: String,
+    pub size: u64,
+    pub enabled: bool,
 }
 
 #[tauri::command]
@@ -129,15 +144,100 @@ pub fn toggle_mod(
 }
 
 #[tauri::command]
+pub fn update_instance_settings(
+    state: State<AppState>,
+    id: String,
+    name: String,
+    memory_mb: u32,
+    java_args: Option<String>,
+    account_id: Option<String>,
+) -> Result<Instance, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Instance name can't be empty".to_string());
+    }
+    let mut inst = resolve_instance(&state, &id)?;
+    inst.name = name;
+    inst.memory_mb = memory_mb.clamp(512, 32768);
+    inst.java_args = java_args.filter(|s| !s.trim().is_empty());
+    inst.account_id = account_id.filter(|s| !s.is_empty());
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+#[tauri::command]
+pub fn set_instance_icon(state: State<AppState>, id: String, data_base64: String) -> Result<Instance, String> {
+    let data = STANDARD.decode(data_base64.as_bytes()).map_err(|e| e.to_string())?;
+    if data.len() > MAX_ICON_BYTES {
+        return Err("Image is too large (max 5MB)".to_string());
+    }
+    if instance::sniff_image_mime(&data).is_none() {
+        return Err("Unrecognized image format - use PNG, JPEG, GIF, or WebP".to_string());
+    }
+
+    let mut inst = resolve_instance(&state, &id)?;
+    std::fs::write(inst.icon_path(&state.instances_dir()), &data).map_err(|e| e.to_string())?;
+    inst.has_icon = true;
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+#[tauri::command]
+pub fn remove_instance_icon(state: State<AppState>, id: String) -> Result<Instance, String> {
+    let mut inst = resolve_instance(&state, &id)?;
+    let _ = std::fs::remove_file(inst.icon_path(&state.instances_dir()));
+    inst.has_icon = false;
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+#[tauri::command]
+pub fn get_instance_icon(state: State<AppState>, id: String) -> Result<Option<String>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let Ok(data) = std::fs::read(inst.icon_path(&state.instances_dir())) else {
+        return Ok(None);
+    };
+    let Some(mime) = instance::sniff_image_mime(&data) else {
+        return Ok(None);
+    };
+    Ok(Some(format!("data:{mime};base64,{}", STANDARD.encode(&data))))
+}
+
+#[tauri::command]
+pub fn export_instance(state: State<AppState>, id: String, dest_path: String) -> Result<(), String> {
+    instance::export_instance(&state.instances_dir(), &id, std::path::Path::new(&dest_path))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn import_instance(state: State<AppState>, source_path: String) -> Result<Instance, String> {
+    instance::import_instance(&state.instances_dir(), std::path::Path::new(&source_path)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ping_server(address: String) -> Result<crate::minecraft::server_ping::ServerStatus, String> {
+    crate::minecraft::server_ping::ping(&address).await.map_err(|e| e.to_string())
+}
+
+/// Reads the server list live from the instance's own `servers.dat`, the
+/// same file Minecraft itself reads/writes - so a server added in-game shows
+/// up here too, not just ones added through Mint.
+#[tauri::command]
+pub fn list_servers(state: State<AppState>, id: String) -> Result<Vec<crate::instance::ServerEntry>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    Ok(crate::minecraft::servers_dat::read_servers(&inst.game_dir(&state.instances_dir())))
+}
+
+#[tauri::command]
 pub fn save_servers(
     state: State<AppState>,
     id: String,
     servers: Vec<crate::instance::ServerEntry>,
-) -> Result<Instance, String> {
-    let mut inst = resolve_instance(&state, &id)?;
-    inst.servers = servers;
-    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
-    Ok(inst)
+) -> Result<Vec<crate::instance::ServerEntry>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::servers_dat::write_servers(&inst.game_dir(&state.instances_dir()), &servers)
+        .map_err(|e| e.to_string())?;
+    Ok(servers)
 }
 
 #[tauri::command]
@@ -220,9 +320,135 @@ pub async fn get_project_info(
         &project_id,
         &inst.version_id,
         inst.loader.modrinth_loader(),
+        "mod",
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_resourcepack_project_info(
+    state: State<'_, AppState>,
+    id: String,
+    project_id: String,
+) -> Result<crate::minecraft::modrinth::ModProjectDetails, String> {
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::modrinth::fetch_project_details(&state.http, &project_id, &inst.version_id, None, "resourcepack")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_resourcepacks(state: State<AppState>, id: String) -> Result<Vec<ResourcePackFile>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.resourcepacks_dir(&state.instances_dir());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let enabled_set = crate::minecraft::resourcepacks::enabled_resourcepacks(&inst.game_dir(&state.instances_dir()));
+
+    let mut packs = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !file_name.to_lowercase().ends_with(".zip") {
+            continue;
+        }
+        let size = entry.metadata().map_err(|e| e.to_string())?.len();
+        let enabled = enabled_set.contains(&file_name);
+        packs.push(ResourcePackFile { file_name, size, enabled });
+    }
+    packs.sort_by(|a, b| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()));
+    Ok(packs)
+}
+
+#[tauri::command]
+pub fn toggle_resourcepack(state: State<AppState>, id: String, file_name: String, enabled: bool) -> Result<(), String> {
+    let inst = resolve_instance(&state, &id)?;
+    let game_dir = inst.game_dir(&state.instances_dir());
+    crate::minecraft::resourcepacks::set_resourcepack_enabled(&game_dir, &file_name, enabled)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_resourcepack_info(
+    state: State<'_, AppState>,
+    id: String,
+    file_name: String,
+) -> Result<crate::minecraft::modrinth::ResourcePackDetails, String> {
+    let dir = resolve_resourcepacks_dir(&state, &id)?;
+    crate::minecraft::modrinth::fetch_resourcepack_details(&state.http, &dir, &file_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn check_resourcepack_updates(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<crate::minecraft::modrinth::ModUpdateInfo>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.resourcepacks_dir(&state.instances_dir());
+    crate::minecraft::modrinth::check_resourcepack_updates(&state.http, &dir, &inst.version_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_resourcepack_update(
+    state: State<'_, AppState>,
+    id: String,
+    old_file_name: String,
+    download_url: String,
+) -> Result<(), String> {
+    let dir = resolve_resourcepacks_dir(&state, &id)?;
+    crate::minecraft::modrinth::apply_update(&state.http, &dir, &old_file_name, &download_url)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_resourcepack(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let dir = resolve_resourcepacks_dir(&state, &id)?;
+    let path = dir.join(&file_name);
+    if path.parent() != Some(dir.as_path()) {
+        return Err("Invalid resource pack file name".to_string());
+    }
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_resourcepacks_dir(state: State<AppState>, id: String) -> Result<String, String> {
+    let dir = resolve_resourcepacks_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn search_resourcepacks(
+    state: State<'_, AppState>,
+    id: String,
+    query: String,
+    offset: u32,
+) -> Result<crate::minecraft::modrinth::ModSearchPage, String> {
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::modrinth::search_resourcepacks(&state.http, &query, &inst.version_id, offset)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn install_resourcepack(
+    state: State<'_, AppState>,
+    id: String,
+    project_id: String,
+) -> Result<crate::minecraft::modrinth::InstalledModInfo, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.resourcepacks_dir(&state.instances_dir());
+    crate::minecraft::modrinth::install_resourcepack(&state.http, &dir, &inst.version_id, &project_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

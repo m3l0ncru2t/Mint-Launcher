@@ -1,3 +1,4 @@
+
 :root {
   --mint-50: #ecfdf5;
   --mint-200: #a7f3d0;
@@ -44,6 +45,31 @@ button {
   grid-template-columns: 260px 1fr;
   height: 100vh;
   overflow: hidden;
+}
+
+.app-loading {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-2);
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--mint-400);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---------- Sidebar ---------- */
@@ -98,6 +124,12 @@ button {
   color: var(--text-0);
   text-align: left;
   width: 100%;
+  cursor: pointer;
+}
+
+.instance-row .icon-btn {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .instance-row:hover {
@@ -120,6 +152,7 @@ button {
   font-weight: 700;
   color: var(--mint-400);
   flex-shrink: 0;
+  object-fit: cover;
 }
 
 .instance-row-text {
@@ -146,8 +179,20 @@ button {
   text-align: center;
 }
 
-.new-instance-btn {
+.sidebar-error {
+  margin: 8px 8px 0;
+}
+
+.sidebar-footer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin: 8px;
+  align-items: stretch;
+}
+
+.new-instance-btn {
+  flex: 1;
   padding: 9px;
   border-radius: 8px;
   border: 1px dashed var(--border);
@@ -356,6 +401,7 @@ button {
   font-weight: 700;
   color: var(--mint-400);
   flex-shrink: 0;
+  object-fit: cover;
 }
 
 .instance-header-text h2 {
@@ -448,6 +494,35 @@ button {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
+}
+
+.files-tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.files-tab {
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px 6px 0 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.files-tab:hover {
+  color: var(--text-1);
+}
+
+.files-tab.active {
+  color: var(--mint-400);
+  border-bottom-color: var(--mint-500);
 }
 
 .panel-header {
@@ -592,6 +667,7 @@ button {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 16px;
+  position: relative;
 }
 
 .progress-card .stage {
@@ -716,6 +792,32 @@ button {
   font-size: 12px;
   color: var(--text-1);
   margin-bottom: 6px;
+}
+
+.instance-icon-editor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.instance-icon-editor-preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--mint-400);
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.instance-icon-editor-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .form-field input[type="text"],
@@ -988,6 +1090,64 @@ button {
   white-space: nowrap;
 }
 
+.server-favicon {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.server-favicon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+
+.server-favicon-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.server-motd {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.server-motd-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.server-offline {
+  color: var(--danger);
+}
+
+.server-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.server-actions-buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.server-players {
+  color: var(--mint-400);
+  font-size: 11px;
+}
+
 .mod-info-header {
   display: flex;
   align-items: center;
@@ -1191,4 +1351,130 @@ button {
   background: none;
   border: none;
   text-decoration: underline;
+}
+
+/* ---------- Skin & cape ---------- */
+
+.skin-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.skin-face-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 10px;
+  background-color: var(--bg-3);
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+
+.skin-preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variant-toggle,
+.skin-preview-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.ghost-btn.small.selected {
+  border-color: var(--mint-500);
+  color: var(--mint-400);
+}
+
+/* ---------- Import from other launchers ---------- */
+
+.import-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.import-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.import-candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.import-candidate-row.selected {
+  border-color: var(--mint-500);
+}
+
+.import-candidate-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-candidate-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-candidate-meta {
+  font-size: 11px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.launcher-badge {
+  background: var(--bg-3);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text-1);
+}
+
+.import-candidate-status {
+  flex-shrink: 0;
+}
+
+.cape-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cape-option {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.cape-option:hover {
+  border-color: var(--text-2);
+  color: var(--text-0);
+}
+
+.cape-option.selected {
+  border-color: var(--mint-500);
+  color: var(--mint-400);
+  background: var(--bg-3);
 }

@@ -5,6 +5,22 @@ export interface ServerEntry {
   address: string;
 }
 
+export interface TextRun {
+  text: string;
+  color: string | null;
+  bold: boolean;
+  italic: boolean;
+  underlined: boolean;
+  strikethrough: boolean;
+}
+
+export interface ServerStatus {
+  motd: TextRun[];
+  online: number | null;
+  max: number | null;
+  favicon: string | null;
+}
+
 export interface Instance {
   id: string;
   name: string;
@@ -14,7 +30,9 @@ export interface Instance {
   createdAt: string;
   lastPlayed: string | null;
   memoryMb: number;
-  servers: ServerEntry[];
+  javaArgs: string | null;
+  accountId: string | null;
+  hasIcon: boolean;
 }
 
 export interface VersionManifestEntry {
@@ -34,6 +52,27 @@ export interface GameProfile {
 export interface AccountSummary {
   id: string;
   username: string;
+}
+
+export interface SkinInfo {
+  id: string;
+  state: "ACTIVE" | "INACTIVE";
+  url: string;
+  variant: "CLASSIC" | "SLIM";
+}
+
+export interface CapeInfo {
+  id: string;
+  state: "ACTIVE" | "INACTIVE";
+  url: string;
+  alias: string;
+}
+
+export interface ProfileDetails {
+  id: string;
+  name: string;
+  skins: SkinInfo[];
+  capes: CapeInfo[];
 }
 
 export interface Settings {
@@ -59,6 +98,27 @@ export interface ModFile {
   size: number;
   enabled: boolean;
   isDependency: boolean;
+}
+
+export interface ResourcePackFile {
+  fileName: string;
+  size: number;
+  enabled: boolean;
+}
+
+export interface ResourcePackDetails {
+  fileName: string;
+  size: number;
+  found: boolean;
+  projectId: string | null;
+  title: string | null;
+  description: string | null;
+  iconUrl: string | null;
+  author: string | null;
+  downloads: number | null;
+  currentVersion: string | null;
+  categories: string[];
+  projectUrl: string | null;
 }
 
 export interface ModSearchResult {
@@ -134,6 +194,24 @@ export interface ModDetails {
 export interface FabricLoaderInfo {
   version: string;
   stable: boolean;
+}
+
+export type LauncherKind = "official" | "multiMc" | "curseForge";
+
+export interface SuggestedPath {
+  label: string;
+  path: string;
+}
+
+export interface ImportCandidate {
+  launcher: LauncherKind;
+  name: string;
+  sourcePath: string;
+  minecraftDir: string;
+  versionId: string;
+  loader: ModLoader;
+  loaderVersion: string | null;
+  iconBase64: string | null;
 }
 
 export interface LoginUrlInfo {

@@ -1,9 +1,21 @@
 use crate::accounts::{self, AccountSummary, SavedAccount};
 use crate::auth::{self, GameProfile};
+use crate::minecraft::profile::{self, ProfileDetails};
 use crate::msa;
 use crate::settings::{self, Settings};
 use crate::state::AppState;
+use base64::Engine;
 use tauri::State;
+
+async fn active_access_token(state: &AppState) -> Result<String, String> {
+    state
+        .active_profile
+        .lock()
+        .await
+        .clone()
+        .map(|p| p.access_token)
+        .ok_or_else(|| "Sign in with a Microsoft account first".to_string())
+}
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
@@ -154,11 +166,55 @@ pub async fn remove_account(state: State<'_, AppState>, id: String) -> Result<()
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_profile_details(state: State<'_, AppState>) -> Result<ProfileDetails, String> {
+    let token = active_access_token(&state).await?;
+    profile::get_profile_details(&state.http, &token).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn upload_skin(
+    state: State<'_, AppState>,
+    variant: String,
+    data_base64: String,
+) -> Result<ProfileDetails, String> {
+    let token = active_access_token(&state).await?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    profile::upload_skin(&state.http, &token, &variant, data)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reset_skin(state: State<'_, AppState>) -> Result<(), String> {
+    let token = active_access_token(&state).await?;
+    profile::reset_skin(&state.http, &token).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_cape(state: State<'_, AppState>, cape_id: String) -> Result<ProfileDetails, String> {
+    let token = active_access_token(&state).await?;
+    profile::set_cape(&state.http, &token, &cape_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_cape(state: State<'_, AppState>) -> Result<(), String> {
+    let token = active_access_token(&state).await?;
+    profile::remove_cape(&state.http, &token).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_player_skin_url(state: State<'_, AppState>, uuid: String) -> Result<Option<String>, String> {
+    Ok(profile::fetch_public_skin_url(&state.http, &uuid).await)
+}
+
 /// Saves (or updates) a Microsoft account's refresh token after a
 /// successful login/refresh, if one was issued. Microsoft may omit a fresh
 /// refresh token from a `grant_type=refresh_token` response, in which case
 /// the previously saved one keeps working and is left as-is.
-async fn persist_account(state: &AppState, id: &str, client_id: &str, result: &msa::LoginResult) {
+pub(crate) async fn persist_account(state: &AppState, id: &str, client_id: &str, result: &msa::LoginResult) {
     let Some(refresh_token) = &result.refresh_token else {
         return;
     };

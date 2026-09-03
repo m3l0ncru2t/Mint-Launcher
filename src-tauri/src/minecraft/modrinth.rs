@@ -129,16 +129,40 @@ pub async fn check_updates(
     game_version: &str,
     loader: Option<&str>,
 ) -> anyhow::Result<Vec<ModUpdateInfo>> {
+    check_updates_matching(client, mods_dir, game_version, loader, |lower| {
+        lower.ends_with(".jar") || lower.ends_with(".jar.disabled")
+    })
+    .await
+}
+
+/// Resource packs have no loader and no ".disabled" rename convention
+/// (enabling/disabling one is tracked separately, in `options.txt`) - every
+/// `.zip` in the folder counts as installed.
+pub async fn check_resourcepack_updates(
+    client: &reqwest::Client,
+    resourcepacks_dir: &Path,
+    game_version: &str,
+) -> anyhow::Result<Vec<ModUpdateInfo>> {
+    check_updates_matching(client, resourcepacks_dir, game_version, None, |lower| lower.ends_with(".zip")).await
+}
+
+async fn check_updates_matching(
+    client: &reqwest::Client,
+    dir: &Path,
+    game_version: &str,
+    loader: Option<&str>,
+    matches: impl Fn(&str) -> bool,
+) -> anyhow::Result<Vec<ModUpdateInfo>> {
     let mut hash_to_file: HashMap<String, String> = HashMap::new();
-    if mods_dir.exists() {
-        for entry in std::fs::read_dir(mods_dir)? {
+    if dir.exists() {
+        for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_file() {
                 continue;
             }
             let file_name = entry.file_name().to_string_lossy().into_owned();
             let lower = file_name.to_lowercase();
-            if !lower.ends_with(".jar") && !lower.ends_with(".jar.disabled") {
+            if !matches(&lower) {
                 continue;
             }
             hash_to_file.insert(sha1_hex_file(&entry.path())?, file_name);
@@ -156,7 +180,7 @@ pub async fn check_updates(
         .json(&body)
         .send()
         .await?;
-    let resp = ensure_success(resp, "Looking up mods on Modrinth").await?;
+    let resp = ensure_success(resp, "Looking up files on Modrinth").await?;
     let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
 
     let mut results = Vec::new();
@@ -280,14 +304,15 @@ pub async fn apply_update(
     Ok(())
 }
 
-pub async fn search_mods(
+async fn search_projects(
     client: &reqwest::Client,
     query: &str,
     game_version: &str,
     loader: Option<&str>,
+    project_type: &str,
     offset: u32,
 ) -> anyhow::Result<ModSearchPage> {
-    let mut facets = vec![format!("[\"versions:{game_version}\"]"), "[\"project_type:mod\"]".to_string()];
+    let mut facets = vec![format!("[\"versions:{game_version}\"]"), format!("[\"project_type:{project_type}\"]")];
     if let Some(l) = loader {
         facets.push(format!("[\"categories:{l}\"]"));
     }
@@ -323,6 +348,27 @@ pub async fn search_mods(
             })
             .collect(),
     })
+}
+
+pub async fn search_mods(
+    client: &reqwest::Client,
+    query: &str,
+    game_version: &str,
+    loader: Option<&str>,
+    offset: u32,
+) -> anyhow::Result<ModSearchPage> {
+    search_projects(client, query, game_version, loader, "mod", offset).await
+}
+
+/// Resource packs have no mod loader, so there's no `loader` parameter here -
+/// only the game version narrows results.
+pub async fn search_resourcepacks(
+    client: &reqwest::Client,
+    query: &str,
+    game_version: &str,
+    offset: u32,
+) -> anyhow::Result<ModSearchPage> {
+    search_projects(client, query, game_version, None, "resourcepack", offset).await
 }
 
 async fn fetch_project_info(client: &reqwest::Client, project_id: &str) -> anyhow::Result<ModrinthProject> {
@@ -378,6 +424,7 @@ pub async fn fetch_project_details(
     project_id: &str,
     game_version: &str,
     loader: Option<&str>,
+    project_type_path: &str,
 ) -> anyhow::Result<ModProjectDetails> {
     let project = fetch_project_info(client, project_id).await?;
     let author = fetch_project_author(client, project_id).await;
@@ -397,7 +444,7 @@ pub async fn fetch_project_details(
         server_side: project.server_side,
         categories: project.categories,
         latest_version,
-        project_url: format!("https://modrinth.com/mod/{}", project.slug),
+        project_url: format!("https://modrinth.com/{project_type_path}/{}", project.slug),
     })
 }
 
@@ -525,6 +572,161 @@ pub async fn install_mod(
     Ok(InstallSummary {
         installed,
         already_installed,
+    })
+}
+
+/// The set of Modrinth project ids already present in `resourcepacks_dir`,
+/// identified by hash - same approach as `installed_project_ids`, but
+/// resource packs have no ".disabled" convention to also match.
+async fn installed_resourcepack_project_ids(
+    client: &reqwest::Client,
+    resourcepacks_dir: &Path,
+) -> anyhow::Result<HashSet<String>> {
+    let mut hashes = Vec::new();
+    if resourcepacks_dir.exists() {
+        for entry in std::fs::read_dir(resourcepacks_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            if entry.file_name().to_string_lossy().to_lowercase().ends_with(".zip") {
+                hashes.push(sha1_hex_file(&entry.path())?);
+            }
+        }
+    }
+    if hashes.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let body = serde_json::json!({ "hashes": hashes, "algorithm": "sha1" });
+    let resp = client
+        .post(format!("{MODRINTH_BASE}/version_files"))
+        .json(&body)
+        .send()
+        .await?;
+    let resp = ensure_success(resp, "Looking up installed resource packs on Modrinth").await?;
+    let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
+    Ok(matched.into_values().map(|v| v.project_id).collect())
+}
+
+/// Installs a resource pack. Unlike mods, resource packs have no loader and
+/// (in practice) no dependency graph worth resolving, so this is a single
+/// download rather than `install_mod`'s recursive walk.
+pub async fn install_resourcepack(
+    client: &reqwest::Client,
+    resourcepacks_dir: &Path,
+    game_version: &str,
+    project_id: &str,
+) -> anyhow::Result<InstalledModInfo> {
+    std::fs::create_dir_all(resourcepacks_dir)?;
+
+    let already_present = installed_resourcepack_project_ids(client, resourcepacks_dir).await?;
+    if already_present.contains(project_id) {
+        anyhow::bail!("This resource pack is already installed");
+    }
+
+    let version = fetch_latest_compatible(client, project_id, game_version, None)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("No version of this resource pack is compatible with this Minecraft version"))?;
+
+    let file = version
+        .files
+        .iter()
+        .find(|f| f.primary)
+        .or(version.files.first())
+        .ok_or_else(|| anyhow::anyhow!("This resource pack has no downloadable file"))?;
+
+    let resp = client.get(&file.url).send().await?;
+    let resp = ensure_success(resp, "Downloading resource pack").await?;
+    let bytes = resp.bytes().await?;
+    std::fs::write(resourcepacks_dir.join(&file.filename), &bytes)?;
+
+    let title = fetch_project_info(client, project_id)
+        .await
+        .map(|p| p.title)
+        .unwrap_or_else(|_| project_id.to_string());
+
+    Ok(InstalledModInfo {
+        project_id: project_id.to_string(),
+        title,
+        file_name: file.filename.clone(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePackDetails {
+    pub file_name: String,
+    pub size: u64,
+    pub found: bool,
+    pub project_id: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub icon_url: Option<String>,
+    pub author: Option<String>,
+    pub downloads: Option<u64>,
+    pub current_version: Option<String>,
+    pub categories: Vec<String>,
+    pub project_url: Option<String>,
+}
+
+/// Looks up everything we can find about one installed resource pack file -
+/// identified by its hash, same as `fetch_mod_details` - for the info panel.
+pub async fn fetch_resourcepack_details(
+    client: &reqwest::Client,
+    resourcepacks_dir: &Path,
+    file_name: &str,
+) -> anyhow::Result<ResourcePackDetails> {
+    let path = resourcepacks_dir.join(file_name);
+    if path.parent() != Some(resourcepacks_dir) {
+        anyhow::bail!("Invalid resource pack file name");
+    }
+    let size = std::fs::metadata(&path)?.len();
+
+    let hash = sha1_hex_file(&path)?;
+    let body = serde_json::json!({ "hashes": [hash], "algorithm": "sha1" });
+    let resp = client
+        .post(format!("{MODRINTH_BASE}/version_files"))
+        .json(&body)
+        .send()
+        .await?;
+    let resp = ensure_success(resp, "Looking up resource pack on Modrinth").await?;
+    let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
+
+    let base = ResourcePackDetails {
+        file_name: file_name.to_string(),
+        size,
+        found: false,
+        project_id: None,
+        title: None,
+        description: None,
+        icon_url: None,
+        author: None,
+        downloads: None,
+        current_version: None,
+        categories: Vec::new(),
+        project_url: None,
+    };
+
+    let Some(version) = matched.into_values().next() else {
+        return Ok(base);
+    };
+
+    let project = fetch_project_info(client, &version.project_id).await.ok();
+    let author = fetch_project_author(client, &version.project_id).await;
+
+    Ok(ResourcePackDetails {
+        found: true,
+        project_id: Some(version.project_id),
+        title: project.as_ref().map(|p| p.title.clone()),
+        description: project.as_ref().map(|p| p.description.clone()),
+        icon_url: project.as_ref().and_then(|p| p.icon_url.clone()),
+        author,
+        downloads: project.as_ref().map(|p| p.downloads),
+        current_version: Some(version.version_number),
+        categories: project.as_ref().map(|p| p.categories.clone()).unwrap_or_default(),
+        project_url: project.as_ref().map(|p| format!("https://modrinth.com/resourcepack/{}", p.slug)),
+        ..base
     })
 }
 

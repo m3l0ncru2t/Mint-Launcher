@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import { api } from "./api";
 import { Sidebar } from "./components/Sidebar";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { CreateInstanceDialog } from "./components/CreateInstanceDialog";
 import { InstanceDetail } from "./components/InstanceDetail";
+import { ImportExternalDialog } from "./components/ImportExternalDialog";
+import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { SettingsDialog } from "./components/SettingsDialog";
 import type { GameProfile, Instance, InstanceLogEvent, LaunchProgressEvent, Settings } from "./types";
@@ -16,7 +20,11 @@ export default function App() {
   const [profile, setProfile] = useState<GameProfile | null>(null);
   const [settings, setSettings] = useState<Settings>({ offlineUsername: null, microsoftClientId: null });
   const [showCreate, setShowCreate] = useState(false);
+  const [showImportExternal, setShowImportExternal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [instanceSettingsFor, setInstanceSettingsFor] = useState<Instance | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [progressByInstance, setProgressByInstance] = useState<Record<string, LaunchProgressEvent>>({});
   const [logsByInstance, setLogsByInstance] = useState<Record<string, string[]>>({});
 
@@ -47,6 +55,14 @@ export default function App() {
     };
   }, []);
 
+  function dismissProgress(instanceId: string) {
+    setProgressByInstance((prev) => {
+      const next = { ...prev };
+      delete next[instanceId];
+      return next;
+    });
+  }
+
   function refreshInstances(selectAfter?: string) {
     api.listInstances().then((inst) => {
       setInstances(inst);
@@ -54,8 +70,22 @@ export default function App() {
     });
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this instance and all of its worlds/mods? This can't be undone.")) return;
+  async function handleImportInstance() {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Mint Launcher Backup", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    setImportError(null);
+    try {
+      const inst = await api.importInstance(path);
+      refreshInstances(inst.id);
+    } catch (e) {
+      setImportError(String(e));
+    }
+  }
+
+  async function performDelete(id: string) {
     await api.deleteInstance(id);
     const remaining = instances.filter((i) => i.id !== id);
     setInstances(remaining);
@@ -65,13 +95,16 @@ export default function App() {
   }
 
   if (!loaded) {
-    return null;
+    return (
+      <div className="app-loading">
+        <div className="spinner" />
+        <div>Loading Mint Launcher…</div>
+      </div>
+    );
   }
 
   if (!profile) {
-    return (
-      <LoginScreen settings={settings} onLoggedIn={setProfile} onOpenSettings={() => setShowSettings(true)} />
-    );
+    return <LoginScreen settings={settings} onLoggedIn={setProfile} />;
   }
 
   const selectedInstance = instances.find((i) => i.id === selectedId) ?? null;
@@ -83,6 +116,10 @@ export default function App() {
         selectedId={selectedId}
         onSelect={setSelectedId}
         onNewInstance={() => setShowCreate(true)}
+        onImportInstance={handleImportInstance}
+        onImportFromLauncher={() => setShowImportExternal(true)}
+        importError={importError}
+        onOpenInstanceSettings={setInstanceSettingsFor}
         profile={profile}
         onProfileChange={setProfile}
         onSignOut={() => api.signOut().then(() => setProfile(null))}
@@ -95,8 +132,9 @@ export default function App() {
           instance={selectedInstance}
           progress={progressByInstance[selectedInstance.id] ?? null}
           logLines={logsByInstance[selectedInstance.id] ?? []}
-          onDelete={handleDelete}
+          onDelete={setConfirmDeleteId}
           onChanged={() => refreshInstances(selectedInstance.id)}
+          onDismissProgress={() => dismissProgress(selectedInstance.id)}
           canPlay={!!profile}
         />
       ) : (
@@ -115,14 +153,44 @@ export default function App() {
         />
       )}
 
-      {showSettings && (
-        <SettingsDialog
-          settings={settings}
-          onClose={() => setShowSettings(false)}
-          onSaved={(s) => {
-            setSettings(s);
-            setShowSettings(false);
+      {showSettings && <SettingsDialog profile={profile} onClose={() => setShowSettings(false)} />}
+
+      {showImportExternal && (
+        <ImportExternalDialog
+          onClose={() => setShowImportExternal(false)}
+          onImported={(id) => {
+            setShowImportExternal(false);
+            refreshInstances(id);
           }}
+        />
+      )}
+
+      {instanceSettingsFor && (
+        <InstanceSettingsDialog
+          instance={instanceSettingsFor}
+          onClose={() => setInstanceSettingsFor(null)}
+          onSaved={(updated) => {
+            setInstanceSettingsFor(null);
+            refreshInstances(updated.id);
+          }}
+          onIconChanged={(updated) => {
+            setInstanceSettingsFor(updated);
+            refreshInstances();
+          }}
+        />
+      )}
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          title="Delete instance?"
+          message="This permanently deletes the instance, including all of its world saves, mods, and settings. There's no way to recover them afterward - back up any worlds you want to keep first."
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            performDelete(confirmDeleteId);
+            setConfirmDeleteId(null);
+          }}
+          onCancel={() => setConfirmDeleteId(null)}
         />
       )}
     </div>

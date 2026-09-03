@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useMicrosoftLogin } from "../hooks/useMicrosoftLogin";
+import { PlayerAvatar } from "./PlayerAvatar";
 import type { AccountSummary, GameProfile, Settings } from "../types";
 
 interface Props {
   settings: Settings;
   onLoggedIn: (profile: GameProfile) => void;
-  onOpenSettings: () => void;
 }
 
-export function LoginScreen({ settings, onLoggedIn, onOpenSettings }: Props) {
+export function LoginScreen({ settings, onLoggedIn }: Props) {
   const [tab, setTab] = useState<"offline" | "microsoft">("microsoft");
   const [username, setUsername] = useState(settings.offlineUsername ?? "");
   const [offlineError, setOfflineError] = useState<string | null>(null);
@@ -108,7 +108,7 @@ export function LoginScreen({ settings, onLoggedIn, onOpenSettings }: Props) {
                     onClick={() => handleSignInSaved(a.id)}
                     disabled={signingInId !== null}
                   >
-                    <div className="account-avatar">{a.username.slice(0, 1).toUpperCase()}</div>
+                    <PlayerAvatar uuid={a.id} username={a.username} />
                     <span className="saved-account-name">{a.username}</span>
                     {signingInId === a.id && <span className="hint-inline">Signing in…</span>}
                   </button>
@@ -142,10 +142,6 @@ export function LoginScreen({ settings, onLoggedIn, onOpenSettings }: Props) {
             {msLogin.error && <div className="error-text">{msLogin.error}</div>}
           </>
         )}
-
-        <button className="settings-link" onClick={onOpenSettings}>
-          Settings
-        </button>
       </div>
     </div>
   );

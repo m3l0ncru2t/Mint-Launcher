@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
-import { BrowseModsDialog } from "./BrowseModsDialog";
+import { BrowseResourcePacksDialog } from "./BrowseResourcePacksDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ModInfoDialog } from "./ModInfoDialog";
-import type { ModFile, ModUpdateInfo } from "../types";
+import { ResourcePackInfoDialog } from "./ResourcePackInfoDialog";
+import type { ModUpdateInfo, ResourcePackFile } from "../types";
 
 interface Props {
   instanceId: string;
@@ -15,8 +15,8 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function ModsPanel({ instanceId }: Props) {
-  const [mods, setMods] = useState<ModFile[]>([]);
+export function ResourcePacksPanel({ instanceId }: Props) {
+  const [packs, setPacks] = useState<ResourcePackFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
@@ -31,11 +31,11 @@ export function ModsPanel({ instanceId }: Props) {
 
   function load(showLoading: boolean, thenCheckUpdates: boolean) {
     if (loadingRef.current) {
-      // Toggling several mods in quick succession can fire more reloads than
-      // can run at once - rather than silently dropping the extra ones
-      // (which left the toggled/renamed file out of sync with `updates`,
-      // hiding its icon until a manual refresh), remember the strongest
-      // request and run it once the in-flight load finishes.
+      // Toggling several packs in quick succession can fire more reloads
+      // than can run at once - rather than silently dropping the extra ones
+      // (which left `updates` out of sync, hiding icons until a manual
+      // refresh), remember the strongest request and run it once the
+      // in-flight load finishes.
       const prev = pendingLoadRef.current;
       pendingLoadRef.current = {
         showLoading: showLoading || (prev?.showLoading ?? false),
@@ -46,9 +46,9 @@ export function ModsPanel({ instanceId }: Props) {
     loadingRef.current = true;
     if (showLoading) setLoading(true);
     api
-      .listMods(instanceId)
+      .listResourcepacks(instanceId)
       .then((list) => {
-        setMods(list);
+        setPacks(list);
         setError(null);
         if (thenCheckUpdates) checkUpdates();
       })
@@ -67,14 +67,14 @@ export function ModsPanel({ instanceId }: Props) {
   function checkUpdates() {
     setCheckingUpdates(true);
     api
-      .checkModUpdates(instanceId)
+      .checkResourcepackUpdates(instanceId)
       .then((list) => {
         const byFile: Record<string, ModUpdateInfo> = {};
         for (const info of list) byFile[info.fileName] = info;
         setUpdates(byFile);
       })
       .catch(() => {
-        // Non-fatal - local mod list still works without Modrinth reachable.
+        // Non-fatal - local resource pack list still works without Modrinth reachable.
       })
       .finally(() => setCheckingUpdates(false));
   }
@@ -89,38 +89,18 @@ export function ModsPanel({ instanceId }: Props) {
   }, [instanceId]);
 
   async function handleToggle(fileName: string, enabled: boolean) {
-    const newFileName = enabled ? fileName.replace(/\.disabled$/i, "") : `${fileName}.disabled`;
-
-    // Toggling renames the file (adds/removes ".disabled"), which would
-    // otherwise orphan its entry in the updates map (keyed by file name) and
-    // drop the icon/title until the next check - carry it over locally
-    // instead of waiting on a network round-trip.
-    setMods((prev) =>
-      prev.map((m) => (m.fileName === fileName ? { ...m, fileName: newFileName, enabled } : m)),
-    );
-    setUpdates((prev) => {
-      const info = prev[fileName];
-      if (!info) return prev;
-      const next = { ...prev };
-      delete next[fileName];
-      next[newFileName] = { ...info, fileName: newFileName };
-      return next;
-    });
-
+    setPacks((prev) => prev.map((p) => (p.fileName === fileName ? { ...p, enabled } : p)));
     try {
-      await api.toggleMod(instanceId, fileName, enabled);
-      // Only bother re-checking for real updates when enabling - a disabled
-      // mod's update availability isn't relevant.
-      load(false, enabled);
+      await api.toggleResourcepack(instanceId, fileName, enabled);
     } catch (e) {
       setError(String(e));
-      load(true, true);
+      load(true, false);
     }
   }
 
   async function handleDelete(fileName: string) {
     try {
-      await api.deleteMod(instanceId, fileName);
+      await api.deleteResourcepack(instanceId, fileName);
       load(true, false);
     } catch (e) {
       setError(String(e));
@@ -131,7 +111,7 @@ export function ModsPanel({ instanceId }: Props) {
     if (!info.downloadUrl) return;
     setUpdating((prev) => new Set(prev).add(info.fileName));
     try {
-      await api.applyModUpdate(instanceId, info.fileName, info.downloadUrl);
+      await api.applyResourcepackUpdate(instanceId, info.fileName, info.downloadUrl);
       load(true, true);
     } catch (e) {
       setError(String(e));
@@ -146,7 +126,7 @@ export function ModsPanel({ instanceId }: Props) {
 
   async function handleOpenFolder() {
     try {
-      const dir = await api.getModsDir(instanceId);
+      const dir = await api.getResourcepacksDir(instanceId);
       await openPath(dir);
     } catch (e) {
       setError(String(e));
@@ -154,75 +134,20 @@ export function ModsPanel({ instanceId }: Props) {
   }
 
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
-  const primaryMods = mods.filter((m) => !m.isDependency);
-  const dependencyMods = mods.filter((m) => m.isDependency);
-
-  function renderRow(m: ModFile) {
-    const update = updates[m.fileName];
-    const isUpdating = updating.has(m.fileName);
-    return (
-      <div
-        key={m.fileName}
-        className={`mod-row${m.enabled ? "" : " disabled"}`}
-        onClick={() => setInfoFile(m.fileName)}
-      >
-        <label className="mod-toggle-wrap" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
-            className="mod-toggle"
-            checked={m.enabled}
-            title={m.enabled ? "Disable mod" : "Enable mod"}
-            onChange={(e) => handleToggle(m.fileName, e.target.checked)}
-          />
-        </label>
-        {update?.iconUrl ? (
-          <img src={update.iconUrl} className="mod-row-icon" alt="" />
-        ) : (
-          <div className="mod-row-icon placeholder-icon" />
-        )}
-        <div className="mod-name-block">
-          <span className="mod-name">{update?.title ?? m.fileName}</span>
-          {update?.title && <span className="mod-filename">{m.fileName}</span>}
-        </div>
-        {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
-        <span className="mod-size">{formatSize(m.size)}</span>
-        {update?.updateAvailable && (
-          <button
-            className="ghost-btn small"
-            disabled={isUpdating}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleUpdate(update);
-            }}
-          >
-            {isUpdating ? "Updating…" : "Update"}
-          </button>
-        )}
-        <button
-          className="icon-btn"
-          title="Remove"
-          onClick={(e) => {
-            e.stopPropagation();
-            setConfirmDeleteFile(m.fileName);
-          }}
-        >
-          ✕
-        </button>
-      </div>
-    );
-  }
 
   return (
     <>
       <div className="panel-header">
-        <h4>Mods{mods.length > 0 ? ` (${mods.length})` : ""}</h4>
+        <h4>Resource Packs{packs.length > 0 ? ` (${packs.length})` : ""}</h4>
         {checkingUpdates && <span className="hint-inline">Checking for updates…</span>}
         {!checkingUpdates && updateCount > 0 && (
-          <span className="hint-inline update-count">{updateCount} update{updateCount === 1 ? "" : "s"} available</span>
+          <span className="hint-inline update-count">
+            {updateCount} update{updateCount === 1 ? "" : "s"} available
+          </span>
         )}
         <div className="panel-actions">
           <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
-            Browse Mods
+            Browse Resource Packs
           </button>
           <button className="ghost-btn small" onClick={() => load(true, true)}>
             Refresh
@@ -235,22 +160,68 @@ export function ModsPanel({ instanceId }: Props) {
       <div className="mods-list">
         {loading && <div className="placeholder">Loading…</div>}
         {!loading && error && <div className="error-text">{error}</div>}
-        {!loading && !error && mods.length === 0 && (
+        {!loading && !error && packs.length === 0 && (
           <div className="placeholder">
-            No mods installed. Drop .jar files into the mods folder - the list updates on its own.
+            No resource packs installed. Drop .zip files into the resourcepacks folder - the list updates on its
+            own.
           </div>
         )}
-        {!loading && !error && primaryMods.map(renderRow)}
-        {!loading && !error && dependencyMods.length > 0 && (
-          <>
-            <div className="mods-subheader">Dependencies</div>
-            {dependencyMods.map(renderRow)}
-          </>
-        )}
+        {!loading &&
+          !error &&
+          packs.map((p) => {
+            const update = updates[p.fileName];
+            const isUpdating = updating.has(p.fileName);
+            return (
+              <div key={p.fileName} className={`mod-row${p.enabled ? "" : " disabled"}`} onClick={() => setInfoFile(p.fileName)}>
+                <label className="mod-toggle-wrap" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="mod-toggle"
+                    checked={p.enabled}
+                    title={p.enabled ? "Disable resource pack" : "Enable resource pack"}
+                    onChange={(e) => handleToggle(p.fileName, e.target.checked)}
+                  />
+                </label>
+                {update?.iconUrl ? (
+                  <img src={update.iconUrl} className="mod-row-icon" alt="" />
+                ) : (
+                  <div className="mod-row-icon placeholder-icon" />
+                )}
+                <div className="mod-name-block">
+                  <span className="mod-name">{update?.title ?? p.fileName}</span>
+                  {update?.title && <span className="mod-filename">{p.fileName}</span>}
+                </div>
+                {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+                <span className="mod-size">{formatSize(p.size)}</span>
+                {update?.updateAvailable && (
+                  <button
+                    className="ghost-btn small"
+                    disabled={isUpdating}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleUpdate(update);
+                    }}
+                  >
+                    {isUpdating ? "Updating…" : "Update"}
+                  </button>
+                )}
+                <button
+                  className="icon-btn"
+                  title="Remove"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDeleteFile(p.fileName);
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            );
+          })}
       </div>
 
       {showBrowse && (
-        <BrowseModsDialog
+        <BrowseResourcePacksDialog
           instanceId={instanceId}
           onClose={() => setShowBrowse(false)}
           onInstalled={() => load(true, true)}
@@ -258,12 +229,17 @@ export function ModsPanel({ instanceId }: Props) {
       )}
 
       {infoFile && (
-        <ModInfoDialog instanceId={instanceId} fileName={infoFile} onClose={() => setInfoFile(null)} />
+        <ResourcePackInfoDialog
+          instanceId={instanceId}
+          fileName={infoFile}
+          enabled={packs.find((p) => p.fileName === infoFile)?.enabled ?? false}
+          onClose={() => setInfoFile(null)}
+        />
       )}
 
       {confirmDeleteFile && (
         <ConfirmDialog
-          title="Remove mod?"
+          title="Remove resource pack?"
           message={`Remove ${confirmDeleteFile}?`}
           confirmLabel="Remove"
           danger

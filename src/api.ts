@@ -3,7 +3,9 @@ import type {
   AccountSummary,
   FabricLoaderInfo,
   GameProfile,
+  ImportCandidate,
   Instance,
+  InstalledModInfo,
   InstallSummary,
   ModDetails,
   ModFile,
@@ -11,8 +13,13 @@ import type {
   ModProjectDetails,
   ModSearchPage,
   ModUpdateInfo,
+  ProfileDetails,
+  ResourcePackDetails,
+  ResourcePackFile,
   ServerEntry,
+  ServerStatus,
   Settings,
+  SuggestedPath,
   VersionManifestEntry,
 } from "./types";
 
@@ -49,11 +56,68 @@ export const api = {
   getModInfo: (id: string, fileName: string) =>
     invoke<ModDetails>("get_mod_info", { id, fileName }),
 
+  listResourcepacks: (id: string) => invoke<ResourcePackFile[]>("list_resourcepacks", { id }),
+
+  deleteResourcepack: (id: string, fileName: string) =>
+    invoke<void>("delete_resourcepack", { id, fileName }),
+
+  getResourcepacksDir: (id: string) => invoke<string>("get_resourcepacks_dir", { id }),
+
+  searchResourcepacks: (id: string, query: string, offset: number) =>
+    invoke<ModSearchPage>("search_resourcepacks", { id, query, offset }),
+
+  installResourcepack: (id: string, projectId: string) =>
+    invoke<InstalledModInfo>("install_resourcepack", { id, projectId }),
+
+  toggleResourcepack: (id: string, fileName: string, enabled: boolean) =>
+    invoke<void>("toggle_resourcepack", { id, fileName, enabled }),
+
+  getResourcepackInfo: (id: string, fileName: string) =>
+    invoke<ResourcePackDetails>("get_resourcepack_info", { id, fileName }),
+
+  getResourcepackProjectInfo: (id: string, projectId: string) =>
+    invoke<ModProjectDetails>("get_resourcepack_project_info", { id, projectId }),
+
+  checkResourcepackUpdates: (id: string) => invoke<ModUpdateInfo[]>("check_resourcepack_updates", { id }),
+
+  applyResourcepackUpdate: (id: string, oldFileName: string, downloadUrl: string) =>
+    invoke<void>("apply_resourcepack_update", { id, oldFileName, downloadUrl }),
+
   getProjectInfo: (id: string, projectId: string) =>
     invoke<ModProjectDetails>("get_project_info", { id, projectId }),
 
+  listServers: (id: string) => invoke<ServerEntry[]>("list_servers", { id }),
+
   saveServers: (id: string, servers: ServerEntry[]) =>
-    invoke<Instance>("save_servers", { id, servers }),
+    invoke<ServerEntry[]>("save_servers", { id, servers }),
+
+  pingServer: (address: string) => invoke<ServerStatus>("ping_server", { address }),
+
+  updateInstanceSettings: (
+    id: string,
+    name: string,
+    memoryMb: number,
+    javaArgs: string | null,
+    accountId: string | null,
+  ) => invoke<Instance>("update_instance_settings", { id, name, memoryMb, javaArgs, accountId }),
+
+  setInstanceIcon: (id: string, dataBase64: string) =>
+    invoke<Instance>("set_instance_icon", { id, dataBase64 }),
+
+  removeInstanceIcon: (id: string) => invoke<Instance>("remove_instance_icon", { id }),
+
+  getInstanceIcon: (id: string) => invoke<string | null>("get_instance_icon", { id }),
+
+  exportInstance: (id: string, destPath: string) => invoke<void>("export_instance", { id, destPath }),
+
+  importInstance: (sourcePath: string) => invoke<Instance>("import_instance", { sourcePath }),
+
+  suggestLauncherPaths: () => invoke<SuggestedPath[]>("suggest_launcher_paths"),
+
+  scanExternalLauncher: (path: string) => invoke<ImportCandidate[]>("scan_external_launcher", { path }),
+
+  importExternalInstance: (candidate: ImportCandidate) =>
+    invoke<Instance>("import_external_instance", { candidate }),
 
   getMinecraftVersions: () => invoke<VersionManifestEntry[]>("get_minecraft_versions"),
 
@@ -78,6 +142,19 @@ export const api = {
   switchAccount: (id: string) => invoke<GameProfile>("switch_account", { id }),
 
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),
+
+  getProfileDetails: () => invoke<ProfileDetails>("get_profile_details"),
+
+  uploadSkin: (variant: "classic" | "slim", dataBase64: string) =>
+    invoke<ProfileDetails>("upload_skin", { variant, dataBase64 }),
+
+  resetSkin: () => invoke<void>("reset_skin"),
+
+  setCape: (capeId: string) => invoke<ProfileDetails>("set_cape", { capeId }),
+
+  removeCape: () => invoke<void>("remove_cape"),
+
+  getPlayerSkinUrl: (uuid: string) => invoke<string | null>("get_player_skin_url", { uuid }),
 
   launchInstance: (instanceId: string, serverAddress?: string) =>
     invoke<number>("launch_instance", { instanceId, serverAddress: serverAddress ?? null }),

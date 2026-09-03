@@ -1,27 +1,14 @@
 import { useState } from "react";
-import { api } from "../api";
-import type { Settings } from "../types";
+import { SkinCapeDialog } from "./SkinCapeDialog";
+import type { GameProfile } from "../types";
 
 interface Props {
-  settings: Settings;
+  profile: GameProfile | null;
   onClose: () => void;
-  onSaved: (settings: Settings) => void;
 }
 
-export function SettingsDialog({ settings, onClose, onSaved }: Props) {
-  const [clientId, setClientId] = useState(settings.microsoftClientId ?? "");
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const trimmed = clientId.trim() || null;
-      await api.setMicrosoftClientId(trimmed);
-      onSaved({ ...settings, microsoftClientId: trimmed });
-    } finally {
-      setSaving(false);
-    }
-  }
+export function SettingsDialog({ profile, onClose }: Props) {
+  const [showSkinCape, setShowSkinCape] = useState(false);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -29,32 +16,25 @@ export function SettingsDialog({ settings, onClose, onSaved }: Props) {
         <h3>Settings</h3>
         <div className="subtitle">Configure Mint Launcher</div>
 
-        <div className="form-field">
-          <label>Microsoft Application (client) ID (optional)</label>
-          <input
-            type="text"
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="Using Mint Launcher's default"
-          />
-          <div className="hint">
-            Microsoft login already works out of the box using Mint Launcher's own app
-            registration. Only set this if you want to use your own instead - register a free
-            app at portal.azure.com (Azure Active Directory → App registrations → New
-            registration), enable "Allow public client flows" under Authentication, and paste
-            the Application (client) ID here.
+        {profile?.userType === "msa" && (
+          <div className="form-field">
+            <label>Account</label>
+            <button type="button" className="ghost-btn" onClick={() => setShowSkinCape(true)}>
+              Skin & Cape
+            </button>
           </div>
-        </div>
+        )}
 
         <div className="modal-actions">
-          <button className="ghost-btn" onClick={onClose}>
+          <button className="primary-btn" onClick={onClose}>
             Close
-          </button>
-          <button className="primary-btn" onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
+
+      {showSkinCape && profile && (
+        <SkinCapeDialog uuid={profile.uuid} onClose={() => setShowSkinCape(false)} />
+      )}
     </div>
   );
 }

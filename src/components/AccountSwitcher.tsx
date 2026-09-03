@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useMicrosoftLogin } from "../hooks/useMicrosoftLogin";
+import { PlayerAvatar } from "./PlayerAvatar";
 import type { AccountSummary, GameProfile } from "../types";
 
 interface Props {
@@ -75,7 +76,7 @@ export function AccountSwitcher({ profile, onProfileChange, onSignOut }: Props) 
   return (
     <div className="account-switcher" ref={ref}>
       <button type="button" className="account-switcher-trigger" onClick={() => setOpen((o) => !o)}>
-        <div className="account-avatar">{profile.username.slice(0, 1).toUpperCase()}</div>
+        <PlayerAvatar uuid={profile.uuid} username={profile.username} />
         <div className="account-info">
           <div className="account-name">{profile.username}</div>
           <div className="account-type">{profile.userType === "msa" ? "Microsoft" : "Offline"}</div>

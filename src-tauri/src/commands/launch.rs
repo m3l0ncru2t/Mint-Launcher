@@ -1,7 +1,11 @@
+use crate::accounts;
+use crate::auth::GameProfile;
+use crate::commands::auth::persist_account;
 use crate::instance::{self, ModLoader};
 use crate::minecraft::download;
 use crate::minecraft::fabric;
 use crate::minecraft::launch::{self as mc_launch, LaunchContext};
+use crate::msa;
 use crate::state::AppState;
 use tauri::{Emitter, State};
 
@@ -30,6 +34,40 @@ pub async fn launch_instance(
     result.map_err(|e| e.to_string())
 }
 
+/// An instance bound to a specific saved account (via its settings) always
+/// launches as that account, silently refreshing its session, regardless of
+/// whichever account is currently active - this is what lets different
+/// instances run under different Microsoft accounts. Instances with no
+/// binding fall back to the currently signed-in profile, as before.
+async fn resolve_launch_profile(state: &AppState, inst: &instance::Instance) -> anyhow::Result<GameProfile> {
+    let Some(account_id) = &inst.account_id else {
+        return state
+            .active_profile
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Sign in before launching an instance"));
+    };
+
+    let account = accounts::load(&state.data_dir)
+        .into_iter()
+        .find(|a| &a.id == account_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "This instance's account is no longer saved - open its settings and pick another."
+            )
+        })?;
+
+    let result = msa::refresh(&state.http, &account.client_id, &account.refresh_token)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("This instance's account needs to be signed in again ({e}) - open its settings and reselect it.")
+        })?;
+
+    persist_account(state, account_id, &account.client_id, &result).await;
+    Ok(result.profile)
+}
+
 async fn do_launch(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -39,12 +77,7 @@ async fn do_launch(
     let inst = instance::get_instance(&state.instances_dir(), instance_id)?
         .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
 
-    let profile = state
-        .active_profile
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Sign in before launching an instance"))?;
+    let profile = resolve_launch_profile(state, &inst).await?;
 
     let manifest = download::fetch_version_manifest(state).await?;
     let entry = manifest
@@ -108,7 +141,15 @@ async fn do_launch(
         },
     );
 
-    let exit_code = mc_launch::spawn_and_stream(app, instance_id, inst.memory_mb, args, &game_dir).await?;
+    let extra_jvm_args: Vec<String> = inst
+        .java_args
+        .as_deref()
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let exit_code =
+        mc_launch::spawn_and_stream(app, instance_id, inst.memory_mb, &extra_jvm_args, args, &game_dir).await?;
 
     let _ = app.emit(
         "launch-progress",

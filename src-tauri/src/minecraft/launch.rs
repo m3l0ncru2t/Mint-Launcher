@@ -164,11 +164,13 @@ pub async fn spawn_and_stream(
     app: &tauri::AppHandle,
     instance_id: &str,
     memory_mb: u32,
+    extra_jvm_args: &[String],
     args: Vec<String>,
     cwd: &Path,
 ) -> anyhow::Result<i32> {
     let mut cmd = Command::new(java_binary());
     cmd.arg(format!("-Xmx{memory_mb}M"));
+    cmd.args(extra_jvm_args);
     cmd.args(&args);
     cmd.current_dir(cwd);
     cmd.stdout(Stdio::piped());

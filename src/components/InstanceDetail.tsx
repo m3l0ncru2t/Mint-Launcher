@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
-import { ModsPanel } from "./ModsPanel";
+import { InstanceFilesPanel } from "./InstanceFilesPanel";
+import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
 import type { Instance, LaunchProgressEvent } from "../types";
 
@@ -10,13 +12,37 @@ interface Props {
   logLines: string[];
   onDelete: (id: string) => void;
   onChanged: () => void;
+  onDismissProgress: () => void;
   canPlay: boolean;
 }
 
-export function InstanceDetail({ instance, progress, logLines, onDelete, onChanged, canPlay }: Props) {
+export function InstanceDetail({
+  instance,
+  progress,
+  logLines,
+  onDelete,
+  onChanged,
+  onDismissProgress,
+  canPlay,
+}: Props) {
   const [launching, setLaunching] = useState(false);
   const [showServers, setShowServers] = useState(false);
+  const [serverCount, setServerCount] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  function loadServerCount() {
+    api
+      .listServers(instance.id)
+      .then((list) => setServerCount(list.length))
+      .catch(() => {});
+  }
+
+  useEffect(() => {
+    loadServerCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance.id]);
 
   useEffect(() => {
     if (logRef.current) {
@@ -41,13 +67,30 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
     }
   }
 
+  async function handleExport() {
+    setExportError(null);
+    const destPath = await save({
+      defaultPath: `${instance.name}.zip`,
+      filters: [{ name: "Mint Launcher Backup", extensions: ["zip"] }],
+    });
+    if (!destPath) return;
+    setExporting(true);
+    try {
+      await api.exportInstance(instance.id, destPath);
+    } catch (e) {
+      setExportError(String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const pct =
     progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
 
   return (
     <div className="main-panel">
       <div className="instance-header">
-        <div className="instance-header-icon">{instance.name.slice(0, 1).toUpperCase()}</div>
+        <InstanceIcon instance={instance} className="instance-header-icon" />
         <div className="instance-header-text">
           <h2>{instance.name}</h2>
           <div className="meta">
@@ -60,8 +103,11 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
           <button className="danger-btn" onClick={() => onDelete(instance.id)}>
             Delete
           </button>
+          <button className="ghost-btn" onClick={handleExport} disabled={exporting}>
+            {exporting ? "Exporting…" : "Export"}
+          </button>
           <button className="ghost-btn" onClick={() => setShowServers(true)}>
-            Servers{instance.servers.length > 0 ? ` (${instance.servers.length})` : ""}
+            Servers{serverCount > 0 ? ` (${serverCount})` : ""}
           </button>
           <button className="play-btn" onClick={() => handlePlay()} disabled={launching || !canPlay}>
             {launching ? "Working…" : "Play"}
@@ -70,6 +116,8 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
       </div>
 
       <div className="instance-body">
+        {exportError && <div className="error-text">{exportError}</div>}
+
         {!canPlay && (
           <div className="progress-card">
             <div className="stage">Sign in required</div>
@@ -79,6 +127,11 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
 
         {progress && (
           <div className="progress-card">
+            {(progress.stage === "exited" || progress.stage === "error") && (
+              <button className="modal-close-btn" title="Dismiss" onClick={onDismissProgress}>
+                ✕
+              </button>
+            )}
             <div className="stage">{progress.stage}</div>
             {progress.message}
             {progress.total > 1 && (
@@ -89,7 +142,7 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
           </div>
         )}
 
-        <ModsPanel instanceId={instance.id} />
+        <InstanceFilesPanel instanceId={instance.id} />
 
         <div className="log-console" ref={logRef}>
           {logLines.length === 0 ? (
@@ -104,7 +157,10 @@ export function InstanceDetail({ instance, progress, logLines, onDelete, onChang
         <ServersDialog
           instance={instance}
           onClose={() => setShowServers(false)}
-          onUpdated={onChanged}
+          onUpdated={() => {
+            onChanged();
+            loadServerCount();
+          }}
           joinDisabled={launching || !canPlay}
           onJoin={(address) => {
             setShowServers(false);
