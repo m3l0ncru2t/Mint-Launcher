@@ -1,5 +1,6 @@
 use crate::auth::GameProfile;
 use crate::settings::{self, Settings};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 
@@ -12,6 +13,11 @@ pub struct AppState {
     /// Microsoft access tokens are short-lived, so re-authenticating each
     /// session avoids stashing a bearer token in plaintext on disk.
     pub active_profile: Mutex<Option<GameProfile>>,
+    /// The OS process id of each instance's currently-running game, if any -
+    /// tracked by pid rather than holding onto the `Child` handle itself, so
+    /// a `stop_instance` call can request termination without fighting the
+    /// long-running `child.wait()` already in progress for the same process.
+    pub running_pids: Mutex<HashMap<String, u32>>,
 }
 
 impl AppState {
@@ -25,6 +31,7 @@ impl AppState {
                 .expect("failed to build http client"),
             settings: Mutex::new(settings),
             active_profile: Mutex::new(None),
+            running_pids: Mutex::new(HashMap::new()),
         }
     }
 

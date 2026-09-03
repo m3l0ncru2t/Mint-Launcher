@@ -1,11 +1,32 @@
 //! Tracks which installed resource packs are actually active, the same way
-//! the game itself does: via the `resourcePacks` list in `options.txt`
-//! (entries formatted as `file/<name>.zip`) - there's no rename-based
-//! enable/disable convention for resource packs the way loaders use
-//! `.disabled` for mods.
+//! the game itself does: via the `resourcePacks` list in `options.txt` -
+//! zipped packs are listed as `file/<name>.zip`, unzipped/folder packs just
+//! by their bare folder name. There's no rename-based enable/disable
+//! convention for resource packs the way loaders use `.disabled` for mods.
 
 use std::collections::HashSet;
 use std::path::Path;
+
+/// Total size of a folder-style resource pack (an unzipped pack directly
+/// under `resourcepacks/`, as opposed to a `.zip`) - Minecraft treats both
+/// as equally valid, so Mint's resource pack list needs to as well.
+pub fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            total += dir_size(&entry.path());
+        } else if file_type.is_file() {
+            total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    total
+}
 
 fn options_path(game_dir: &Path) -> std::path::PathBuf {
     game_dir.join("options.txt")
@@ -24,7 +45,10 @@ fn parse_resource_packs_line(line: &str) -> Vec<String> {
     serde_json::from_str(value).unwrap_or_default()
 }
 
-/// The set of installed resource pack file names currently active in-game.
+/// The set of installed resource pack file/folder names currently active
+/// in-game - normalizes away the `file/` prefix zipped packs use, since
+/// folder packs are listed bare and Mint's list identifies both the same
+/// way (by name).
 pub fn enabled_resourcepacks(game_dir: &Path) -> HashSet<String> {
     let lines = read_lines(game_dir);
     let Some(line) = lines.iter().find(|l| l.starts_with("resourcePacks:")) else {
@@ -32,7 +56,7 @@ pub fn enabled_resourcepacks(game_dir: &Path) -> HashSet<String> {
     };
     parse_resource_packs_line(line)
         .into_iter()
-        .filter_map(|entry| entry.strip_prefix("file/").map(str::to_string))
+        .map(|entry| entry.strip_prefix("file/").map(str::to_string).unwrap_or(entry))
         .collect()
 }
 
@@ -42,7 +66,8 @@ pub fn enabled_resourcepacks(game_dir: &Path) -> HashSet<String> {
 pub fn set_resourcepack_enabled(game_dir: &Path, file_name: &str, enabled: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(game_dir)?;
     let mut lines = read_lines(game_dir);
-    let entry = format!("file/{file_name}");
+    let is_folder = game_dir.join("resourcepacks").join(file_name).is_dir();
+    let entry = if is_folder { file_name.to_string() } else { format!("file/{file_name}") };
 
     let mut list = lines
         .iter()

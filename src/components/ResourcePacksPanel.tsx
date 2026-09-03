@@ -112,7 +112,10 @@ export function ResourcePacksPanel({ instanceId }: Props) {
     setUpdating((prev) => new Set(prev).add(info.fileName));
     try {
       await api.applyResourcepackUpdate(instanceId, info.fileName, info.downloadUrl);
-      load(true, true);
+      // showLoading=false - the per-row spinner already shows this update is
+      // in progress, so there's no need to flash the whole list to a
+      // "Loading…" placeholder just to refresh one row's data.
+      load(false, true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -162,8 +165,8 @@ export function ResourcePacksPanel({ instanceId }: Props) {
         {!loading && error && <div className="error-text">{error}</div>}
         {!loading && !error && packs.length === 0 && (
           <div className="placeholder">
-            No resource packs installed. Drop .zip files into the resourcepacks folder - the list updates on its
-            own.
+            No resource packs installed. Drop .zip files (or unzipped pack folders) into the resourcepacks folder -
+            the list updates on its own.
           </div>
         )}
         {!loading &&
@@ -202,7 +205,7 @@ export function ResourcePacksPanel({ instanceId }: Props) {
                       handleUpdate(update);
                     }}
                   >
-                    {isUpdating ? "Updating…" : "Update"}
+                    {isUpdating ? <span className="spinner-small" /> : "Update"}
                   </button>
                 )}
                 <button

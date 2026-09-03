@@ -203,15 +203,30 @@ pub fn get_instance_icon(state: State<AppState>, id: String) -> Result<Option<St
     Ok(Some(format!("data:{mime};base64,{}", STANDARD.encode(&data))))
 }
 
+/// A large instance's worlds/mods can take a while to zip/unzip - `async`
+/// plus `spawn_blocking` keeps that file I/O off the main thread, so the
+/// window stays responsive instead of the OS reporting Mint as "not
+/// responding" mid-export/import.
 #[tauri::command]
-pub fn export_instance(state: State<AppState>, id: String, dest_path: String) -> Result<(), String> {
-    instance::export_instance(&state.instances_dir(), &id, std::path::Path::new(&dest_path))
-        .map_err(|e| e.to_string())
+pub async fn export_instance(state: State<'_, AppState>, id: String, dest_path: String) -> Result<(), String> {
+    let instances_dir = state.instances_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        instance::export_instance(&instances_dir, &id, std::path::Path::new(&dest_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn import_instance(state: State<AppState>, source_path: String) -> Result<Instance, String> {
-    instance::import_instance(&state.instances_dir(), std::path::Path::new(&source_path)).map_err(|e| e.to_string())
+pub async fn import_instance(state: State<'_, AppState>, source_path: String) -> Result<Instance, String> {
+    let instances_dir = state.instances_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        instance::import_instance(&instances_dir, std::path::Path::new(&source_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -348,14 +363,21 @@ pub fn list_resourcepacks(state: State<AppState>, id: String) -> Result<Vec<Reso
     let mut packs = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
-            continue;
-        }
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if !file_name.to_lowercase().ends_with(".zip") {
+
+        // A resource pack is either a `.zip` (the only form Modrinth
+        // distributes, and what Mint's own installer writes) or a plain
+        // unzipped folder - both are equally valid to Minecraft itself, and
+        // folder packs are common enough (e.g. carried over by the launcher
+        // importer) that skipping them would silently hide real packs.
+        let size = if file_type.is_dir() {
+            crate::minecraft::resourcepacks::dir_size(&entry.path())
+        } else if file_type.is_file() && file_name.to_lowercase().ends_with(".zip") {
+            entry.metadata().map_err(|e| e.to_string())?.len()
+        } else {
             continue;
-        }
-        let size = entry.metadata().map_err(|e| e.to_string())?.len();
+        };
         let enabled = enabled_set.contains(&file_name);
         packs.push(ResourcePackFile { file_name, size, enabled });
     }
@@ -415,7 +437,11 @@ pub fn delete_resourcepack(state: State<AppState>, id: String, file_name: String
     if path.parent() != Some(dir.as_path()) {
         return Err("Invalid resource pack file name".to_string());
     }
-    std::fs::remove_file(path).map_err(|e| e.to_string())
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]

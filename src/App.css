@@ -47,6 +47,35 @@ button {
   overflow: hidden;
 }
 
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--mint-500);
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: calc(100vw - 32px);
+}
+
+.update-banner-text {
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .app-loading {
   height: 100vh;
   display: flex;
@@ -70,6 +99,17 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+
+.spinner-small {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--mint-400);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
 }
 
 /* ---------- Sidebar ---------- */
@@ -440,6 +480,21 @@ button {
   opacity: 0.6;
   cursor: not-allowed;
   filter: none;
+}
+
+.stop-btn {
+  background: linear-gradient(135deg, #f87171, #b91c1c);
+  color: #2a0605;
+  border: none;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 26px;
+  border-radius: 8px;
+  transition: filter 0.15s ease;
+}
+
+.stop-btn:hover {
+  filter: brightness(1.08);
 }
 
 .ghost-btn {

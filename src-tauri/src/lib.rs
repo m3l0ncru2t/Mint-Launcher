@@ -18,6 +18,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -82,6 +84,7 @@ pub fn run() {
             commands::auth::remove_cape,
             commands::auth::get_player_skin_url,
             commands::launch::launch_instance,
+            commands::launch::stop_instance,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

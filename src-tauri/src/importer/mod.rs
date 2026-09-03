@@ -34,6 +34,11 @@ pub struct ImportCandidate {
     pub loader: ModLoader,
     pub loader_version: Option<String>,
     pub icon_base64: Option<String>,
+    /// Combined size of everything that would actually be copied (saves,
+    /// mods, resource packs, etc) - filled in by `scan` after building the
+    /// candidate list, never by the individual `scan_*` constructors.
+    #[serde(default)]
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,10 +82,31 @@ pub fn suggest_paths() -> Vec<SuggestedPath> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         candidates.push(("Official Minecraft Launcher", home.join(".minecraft")));
-        let local_share = home.join(".local").join("share");
+        // `dirs::data_dir()` resolves `$XDG_DATA_HOME` when a user has
+        // customized it, falling back to `~/.local/share` otherwise -
+        // more robust than assuming the default unconditionally.
+        let local_share = dirs::data_dir().unwrap_or_else(|| home.join(".local").join("share"));
         candidates.push(("Prism Launcher", local_share.join("PrismLauncher")));
         candidates.push(("PolyMC", local_share.join("PolyMC")));
         candidates.push(("MultiMC", local_share.join("multimc")));
+
+        // Flatpak sandboxes each app's data under ~/.var/app/<id>/ instead
+        // of the usual XDG locations - a very common way to have Minecraft
+        // or Prism installed on Linux, so worth checking specifically
+        // rather than only ever finding native installs.
+        let flatpak_apps = home.join(".var").join("app");
+        candidates.push((
+            "Official Minecraft Launcher (Flatpak)",
+            flatpak_apps.join("com.mojang.Minecraft").join(".minecraft"),
+        ));
+        candidates.push((
+            "Prism Launcher (Flatpak)",
+            flatpak_apps.join("org.prismlauncher.PrismLauncher").join("data").join("PrismLauncher"),
+        ));
+        candidates.push((
+            "PolyMC (Flatpak)",
+            flatpak_apps.join("org.polymc.PolyMC").join("data").join("PolyMC"),
+        ));
     }
 
     candidates
@@ -102,33 +128,42 @@ pub fn scan(path: &Path) -> anyhow::Result<Vec<ImportCandidate>> {
         anyhow::bail!("That folder doesn't exist");
     }
 
-    if path.join("versions").is_dir() {
-        return Ok(scan_official(path));
-    }
-    if path.join("mmc-pack.json").is_file() {
-        return Ok(scan_multimc_instance(path).into_iter().collect());
-    }
-    if path.join("minecraftinstance.json").is_file() {
-        return Ok(scan_curseforge_instance(path).into_iter().collect());
-    }
-
-    let instances_subdir = path.join("instances");
-    if instances_subdir.is_dir() {
-        let out = scan_children(&instances_subdir, scan_multimc_instance);
-        if !out.is_empty() {
-            return Ok(out);
+    let mut candidates = if path.join("versions").is_dir() {
+        scan_official(path)
+    } else if path.join("mmc-pack.json").is_file() {
+        scan_multimc_instance(path).into_iter().collect()
+    } else if path.join("minecraftinstance.json").is_file() {
+        scan_curseforge_instance(path).into_iter().collect()
+    } else {
+        let instances_subdir = path.join("instances");
+        let mut out = if instances_subdir.is_dir() {
+            scan_children(&instances_subdir, scan_multimc_instance)
+        } else {
+            Vec::new()
+        };
+        if out.is_empty() {
+            out = scan_children(path, scan_curseforge_instance);
         }
+        if out.is_empty() {
+            anyhow::bail!(
+                "Couldn't recognize a supported launcher here. Pick your .minecraft folder, a \
+                 Prism/PolyMC/MultiMC \"instances\" folder, or a CurseForge \"Instances\" folder."
+            );
+        }
+        out
+    };
+
+    // The official launcher shares one `minecraft_dir` across every
+    // version's candidate, so cache by path rather than re-walking the same
+    // (possibly large) saves/mods/etc folders once per version found there.
+    let mut size_cache: HashMap<String, u64> = HashMap::new();
+    for c in &mut candidates {
+        c.size_bytes = *size_cache
+            .entry(c.minecraft_dir.clone())
+            .or_insert_with(|| content_stats(Path::new(&c.minecraft_dir)).1);
     }
 
-    let out = scan_children(path, scan_curseforge_instance);
-    if !out.is_empty() {
-        return Ok(out);
-    }
-
-    anyhow::bail!(
-        "Couldn't recognize a supported launcher here. Pick your .minecraft folder, a Prism/PolyMC/MultiMC \
-         \"instances\" folder, or a CurseForge \"Instances\" folder."
-    )
+    Ok(candidates)
 }
 
 fn scan_children(
@@ -218,6 +253,7 @@ fn scan_official(root: &Path) -> Vec<ImportCandidate> {
             loader,
             loader_version,
             icon_base64: None,
+            size_bytes: 0,
         })
     });
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -300,6 +336,7 @@ fn scan_multimc_instance(dir: &Path) -> Option<ImportCandidate> {
         loader,
         loader_version,
         icon_base64,
+        size_bytes: 0,
     })
 }
 
@@ -337,19 +374,65 @@ fn scan_curseforge_instance(dir: &Path) -> Option<ImportCandidate> {
         loader,
         loader_version,
         icon_base64: None,
+        size_bytes: 0,
     })
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// Walks `CONTENT_DIRS`/`CONTENT_FILES` under a `.minecraft`-equivalent
+/// folder and returns `(file_count, total_bytes)` - shared by `scan` (to
+/// show an estimated size before importing) and `import_external` (to size
+/// its progress bar), so there's one tree-walk implementation instead of two
+/// that could drift apart on what counts as "content".
+fn content_stats(minecraft_dir: &Path) -> (u64, u64) {
+    let mut count = 0u64;
+    let mut bytes = 0u64;
+    for dir_name in CONTENT_DIRS {
+        walk_stats(&minecraft_dir.join(dir_name), &mut count, &mut bytes);
+    }
+    for file_name in CONTENT_FILES {
+        if let Ok(meta) = fs::metadata(minecraft_dir.join(file_name)) {
+            count += 1;
+            bytes += meta.len();
+        }
+    }
+    (count, bytes)
+}
+
+fn walk_stats(dir: &Path, count: &mut u64, bytes: &mut u64) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            walk_stats(&entry.path(), count, bytes);
+        } else if file_type.is_file() {
+            *count += 1;
+            *bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+}
+
+fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    copied: &mut u64,
+    total: u64,
+    on_progress: &mut impl FnMut(u64, u64, &str),
+) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let dst_path = dst.join(entry.file_name());
         if file_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_path)?;
+            copy_dir_recursive(&entry.path(), &dst_path, copied, total, on_progress)?;
         } else if file_type.is_file() {
             fs::copy(entry.path(), &dst_path)?;
+            *copied += 1;
+            on_progress(*copied, total, &entry.file_name().to_string_lossy());
         }
         // Symlinks are intentionally skipped rather than followed, so a
         // stray link elsewhere on disk can't drag unrelated files in.
@@ -360,15 +443,42 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// The folders/files that make up "everything a player would consider part
 /// of their instance" - deliberately excludes `versions/`, `libraries/`, and
 /// `assets/`, which Mint manages itself and re-downloads per version/account
-/// as needed.
-const CONTENT_DIRS: &[&str] = &["saves", "resourcepacks", "shaderpacks", "config", "mods", "screenshots"];
+/// as needed. Includes the data folders of common minimap/render mods
+/// (Xaero's, JourneyMap, VoxelMap, Voxy) alongside the vanilla folders,
+/// since those live at the game-dir root right next to `saves/` and are
+/// easy to otherwise miss.
+const CONTENT_DIRS: &[&str] = &[
+    "saves",
+    "resourcepacks",
+    "shaderpacks",
+    "config",
+    "mods",
+    "screenshots",
+    "schematics",
+    "XaeroWaypoints",
+    "XaeroWorldMap",
+    "journeymap",
+    "voxelmap",
+    "voxy",
+    "bobby",
+    "Distant_Horizons_server_data",
+];
 const CONTENT_FILES: &[&str] = &["options.txt", "optionsof.txt", "servers.dat"];
 
 /// Creates a brand-new Mint instance from an `ImportCandidate` and copies
 /// over its world saves, mods, resource/shader packs, config, options, and
 /// server list. Runs under a freshly generated instance id, same as
 /// `import_instance` - never touches or moves the original launcher's files.
-pub fn import_external(instances_root: &Path, candidate: &ImportCandidate) -> anyhow::Result<Instance> {
+/// `on_progress(files_copied, files_total, current_file_name)` is called
+/// after every file - a world save alone can run into the thousands of
+/// files, so callers should throttle how often they actually act on it
+/// (e.g. emitting a UI event at most every so often) rather than on every
+/// single call.
+pub fn import_external(
+    instances_root: &Path,
+    candidate: &ImportCandidate,
+    mut on_progress: impl FnMut(u64, u64, &str),
+) -> anyhow::Result<Instance> {
     let content_dir = PathBuf::from(&candidate.minecraft_dir);
     if !content_dir.is_dir() {
         anyhow::bail!("The source folder is no longer there - it may have moved or been deleted");
@@ -383,16 +493,22 @@ pub fn import_external(instances_root: &Path, candidate: &ImportCandidate) -> an
     )?;
     let game_dir = inst.game_dir(instances_root);
 
+    let (total_files, _) = content_stats(&content_dir);
+    let mut copied: u64 = 0;
+    on_progress(0, total_files, "Starting import…");
+
     for dir_name in CONTENT_DIRS {
         let src = content_dir.join(dir_name);
         if src.is_dir() {
-            copy_dir_recursive(&src, &game_dir.join(dir_name))?;
+            copy_dir_recursive(&src, &game_dir.join(dir_name), &mut copied, total_files, &mut on_progress)?;
         }
     }
     for file_name in CONTENT_FILES {
         let src = content_dir.join(file_name);
         if src.is_file() {
             let _ = fs::copy(&src, game_dir.join(file_name));
+            copied += 1;
+            on_progress(copied, total_files, file_name);
         }
     }
 

@@ -158,4 +158,6 @@ export const api = {
 
   launchInstance: (instanceId: string, serverAddress?: string) =>
     invoke<number>("launch_instance", { instanceId, serverAddress: serverAddress ?? null }),
+
+  stopInstance: (instanceId: string) => invoke<void>("stop_instance", { instanceId }),
 };

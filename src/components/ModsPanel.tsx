@@ -132,7 +132,10 @@ export function ModsPanel({ instanceId }: Props) {
     setUpdating((prev) => new Set(prev).add(info.fileName));
     try {
       await api.applyModUpdate(instanceId, info.fileName, info.downloadUrl);
-      load(true, true);
+      // showLoading=false - the per-row spinner already shows this update is
+      // in progress, so there's no need to flash the whole list to a
+      // "Loading…" placeholder just to refresh one row's data.
+      load(false, true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -195,7 +198,7 @@ export function ModsPanel({ instanceId }: Props) {
               handleUpdate(update);
             }}
           >
-            {isUpdating ? "Updating…" : "Update"}
+            {isUpdating ? <span className="spinner-small" /> : "Update"}
           </button>
         )}
         <button

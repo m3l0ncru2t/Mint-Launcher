@@ -203,6 +203,13 @@ export interface SuggestedPath {
   path: string;
 }
 
+export interface ImportProgressEvent {
+  name: string;
+  current: number;
+  total: number;
+  message: string;
+}
+
 export interface ImportCandidate {
   launcher: LauncherKind;
   name: string;
@@ -212,6 +219,7 @@ export interface ImportCandidate {
   loader: ModLoader;
   loaderVersion: string | null;
   iconBase64: string | null;
+  sizeBytes: number;
 }
 
 export interface LoginUrlInfo {

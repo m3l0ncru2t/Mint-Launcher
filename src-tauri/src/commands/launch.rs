@@ -34,6 +34,31 @@ pub async fn launch_instance(
     result.map_err(|e| e.to_string())
 }
 
+/// Force-kills an instance's running game process, identified only by its
+/// pid (recorded by `spawn_and_stream`) - not by holding onto the `Child`
+/// handle itself, since that's already tied up in the long-running
+/// `child.wait()` for the same launch.
+#[tauri::command]
+pub async fn stop_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    let pid = state.running_pids.lock().await.get(&instance_id).copied();
+    let pid = pid.ok_or_else(|| "This instance isn't running".to_string())?;
+    kill_process(pid).map_err(|e| e.to_string())
+}
+
+#[cfg(unix)]
+fn kill_process(pid: u32) -> std::io::Result<()> {
+    std::process::Command::new("kill").arg("-KILL").arg(pid.to_string()).status()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn kill_process(pid: u32) -> std::io::Result<()> {
+    std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F", "/T"])
+        .status()?;
+    Ok(())
+}
+
 /// An instance bound to a specific saved account (via its settings) always
 /// launches as that account, silently refreshing its session, regardless of
 /// whichever account is currently active - this is what lets different
@@ -149,7 +174,8 @@ async fn do_launch(
         .map(str::to_string)
         .collect();
     let exit_code =
-        mc_launch::spawn_and_stream(app, instance_id, inst.memory_mb, &extra_jvm_args, args, &game_dir).await?;
+        mc_launch::spawn_and_stream(app, state, instance_id, inst.memory_mb, &extra_jvm_args, args, &game_dir)
+            .await?;
 
     let _ = app.emit(
         "launch-progress",

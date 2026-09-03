@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
-import type { ImportCandidate, SuggestedPath } from "../types";
+import type { ImportCandidate, ImportProgressEvent, SuggestedPath } from "../types";
 
 interface Props {
   onClose: () => void;
@@ -14,6 +15,13 @@ const LAUNCHER_LABELS: Record<ImportCandidate["launcher"], string> = {
   curseForge: "CurseForge",
 };
 
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 type RowStatus = "idle" | "importing" | "done" | "error";
 
 export function ImportExternalDialog({ onClose, onImported }: Props) {
@@ -24,9 +32,19 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [statuses, setStatuses] = useState<Record<number, { status: RowStatus; error?: string }>>({});
   const [importing, setImporting] = useState(false);
+  const [currentProgress, setCurrentProgress] = useState<ImportProgressEvent | null>(null);
 
   useEffect(() => {
     api.suggestLauncherPaths().then(setSuggestions).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ImportProgressEvent>("import-progress", (event) => {
+      setCurrentProgress(event.payload);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   async function scan(path: string) {
@@ -39,7 +57,7 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
         setScanError("No importable instances found in that folder.");
       } else {
         setCandidates(found);
-        setSelected(new Set(found.map((_, i) => i)));
+        setSelected(new Set());
         setStatuses({});
       }
     } catch (e) {
@@ -70,12 +88,15 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
     let lastId: string | null = null;
     for (const index of selected) {
       setStatuses((prev) => ({ ...prev, [index]: { status: "importing" } }));
+      setCurrentProgress(null);
       try {
         const inst = await api.importExternalInstance(candidates[index]);
         lastId = inst.id;
         setStatuses((prev) => ({ ...prev, [index]: { status: "done" } }));
       } catch (e) {
         setStatuses((prev) => ({ ...prev, [index]: { status: "error", error: String(e) } }));
+      } finally {
+        setCurrentProgress(null);
       }
     }
     setImporting(false);
@@ -144,11 +165,29 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
                         <span className="launcher-badge">{LAUNCHER_LABELS[c.launcher]}</span>
                         {c.versionId}
                         {c.loader !== "vanilla" && ` · ${c.loader}${c.loaderVersion ? ` ${c.loaderVersion}` : ""}`}
+                        {" · "}
+                        {formatSize(c.sizeBytes)}
                       </div>
+                      {status === "importing" && currentProgress && currentProgress.total > 0 && (
+                        <div className="progress-bar-track">
+                          <div
+                            className="progress-bar-fill"
+                            style={{
+                              width: `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`,
+                            }}
+                          />
+                        </div>
+                      )}
                       {status === "error" && <div className="error-text">{statuses[i]?.error}</div>}
                     </div>
                     <div className="import-candidate-status">
-                      {status === "importing" && <span className="hint-inline">Importing…</span>}
+                      {status === "importing" && (
+                        <span className="hint-inline">
+                          {currentProgress && currentProgress.total > 0
+                            ? `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`
+                            : "Importing…"}
+                        </span>
+                      )}
                       {status === "done" && <span className="hint-inline">✓ Imported</span>}
                       {status === "error" && <span className="hint-inline">Failed</span>}
                     </div>

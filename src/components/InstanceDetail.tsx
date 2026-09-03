@@ -30,6 +30,7 @@ export function InstanceDetail({
   const [serverCount, setServerCount] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [stopError, setStopError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   function loadServerCount() {
@@ -67,6 +68,15 @@ export function InstanceDetail({
     }
   }
 
+  async function handleStop() {
+    setStopError(null);
+    try {
+      await api.stopInstance(instance.id);
+    } catch (e) {
+      setStopError(String(e));
+    }
+  }
+
   async function handleExport() {
     setExportError(null);
     const destPath = await save({
@@ -86,6 +96,7 @@ export function InstanceDetail({
 
   const pct =
     progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  const isRunning = launching && progress?.stage === "launching";
 
   return (
     <div className="main-panel">
@@ -109,14 +120,21 @@ export function InstanceDetail({
           <button className="ghost-btn" onClick={() => setShowServers(true)}>
             Servers{serverCount > 0 ? ` (${serverCount})` : ""}
           </button>
-          <button className="play-btn" onClick={() => handlePlay()} disabled={launching || !canPlay}>
-            {launching ? "Working…" : "Play"}
-          </button>
+          {isRunning ? (
+            <button className="stop-btn" onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button className="play-btn" onClick={() => handlePlay()} disabled={launching || !canPlay}>
+              {launching ? "Working…" : "Play"}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="instance-body">
         {exportError && <div className="error-text">{exportError}</div>}
+        {stopError && <div className="error-text">{stopError}</div>}
 
         {!canPlay && (
           <div className="progress-card">

@@ -1,6 +1,7 @@
 use super::manifest::{ArgumentEntry, ArgumentValue, VersionDetail};
 use super::rules::rules_allow;
 use crate::auth::GameProfile;
+use crate::state::AppState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -162,6 +163,7 @@ fn java_binary() -> &'static str {
 /// events until it exits, returning the process exit code.
 pub async fn spawn_and_stream(
     app: &tauri::AppHandle,
+    state: &AppState,
     instance_id: &str,
     memory_mb: u32,
     extra_jvm_args: &[String],
@@ -182,6 +184,10 @@ pub async fn spawn_and_stream(
             java_binary()
         )
     })?;
+
+    if let Some(pid) = child.id() {
+        state.running_pids.lock().await.insert(instance_id.to_string(), pid);
+    }
 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
@@ -213,6 +219,7 @@ pub async fn spawn_and_stream(
     let status = child.wait().await?;
     let _ = out_task.await;
     let _ = err_task.await;
+    state.running_pids.lock().await.remove(instance_id);
 
     Ok(status.code().unwrap_or(-1))
 }

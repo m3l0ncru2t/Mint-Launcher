@@ -11,6 +11,7 @@ import { ImportExternalDialog } from "./components/ImportExternalDialog";
 import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { UpdateBanner } from "./components/UpdateBanner";
 import type { GameProfile, Instance, InstanceLogEvent, LaunchProgressEvent, Settings } from "./types";
 
 export default function App() {
@@ -111,6 +112,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <UpdateBanner />
       <Sidebar
         instances={instances}
         selectedId={selectedId}
