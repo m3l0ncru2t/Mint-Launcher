@@ -22,8 +22,23 @@ export function useMicrosoftLogin() {
   const [error, setError] = useState<string | null>(null);
   const cancelledRef = useRef(false);
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const inFlightRef = useRef(false);
 
   async function login(): Promise<GameProfile | null> {
+    // A double-click (or any other re-entrant call before `busy` has
+    // re-rendered) would otherwise start a second sign-in attempt while one
+    // is already running. Each attempt registers its own listener for the
+    // same "microsoft-login-open" event, and Tauri delivers an emitted
+    // event to every listener currently subscribed - so with two listeners
+    // alive, each backend attempt's event opens a browser tab from *both*
+    // listeners, and completing sign-in in one of the resulting duplicate
+    // tabs can hand Microsoft's token endpoint an authorization code that a
+    // sibling tab already superseded (surfaces as an opaque AADSTS70000
+    // "invalid code" error). Refusing to start a second attempt while one
+    // is in flight prevents the duplicate listeners from ever existing.
+    if (inFlightRef.current) return null;
+    inFlightRef.current = true;
+
     setError(null);
     setWaitingForBrowser(false);
     setBusy(true);
@@ -47,6 +62,7 @@ export function useMicrosoftLogin() {
         unlisten();
         unlistenRef.current = null;
       }
+      inFlightRef.current = false;
       if (!cancelledRef.current) {
         setBusy(false);
         setWaitingForBrowser(false);
@@ -58,6 +74,7 @@ export function useMicrosoftLogin() {
     cancelledRef.current = true;
     unlistenRef.current?.();
     unlistenRef.current = null;
+    inFlightRef.current = false;
     setBusy(false);
     setWaitingForBrowser(false);
     setError(null);
