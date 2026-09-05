@@ -3,6 +3,7 @@ import appIcon from "../assets/app-icon.png";
 import { api } from "../api";
 import { useMicrosoftLogin } from "../hooks/useMicrosoftLogin";
 import { PlayerAvatar } from "./PlayerAvatar";
+import { UpdateBanner } from "./UpdateBanner";
 import type { AccountSummary, GameProfile, Settings } from "../types";
 
 interface Props {
@@ -81,6 +82,7 @@ export function LoginScreen({ settings, onLoggedIn }: Props) {
 
   return (
     <div className="login-screen">
+      <UpdateBanner />
       <div className="login-card">
         <img src={appIcon} alt="" className="logo" />
         <h2>Mint Launcher</h2>

@@ -59,14 +59,20 @@ button {
   transform: translateX(-50%);
   z-index: 30;
   display: flex;
-  align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  gap: 10px;
   background: var(--bg-2);
   border: 1px solid var(--mint-500);
   border-radius: 10px;
   padding: 10px 14px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   max-width: calc(100vw - 32px);
+}
+
+.update-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .update-banner-text {
@@ -79,6 +85,18 @@ button {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.update-banner-console {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 420px;
+  max-width: 100%;
+}
+
+.update-banner-console .log-console {
+  max-height: 160px;
 }
 
 .app-loading {
