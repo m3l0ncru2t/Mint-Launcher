@@ -19,7 +19,14 @@ pub struct DownloadProgress {
     pub total: u64,
 }
 
-fn emit_progress(app: &tauri::AppHandle, instance_id: &str, stage: &str, message: &str, current: u64, total: u64) {
+pub(crate) fn emit_progress(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    stage: &str,
+    message: &str,
+    current: u64,
+    total: u64,
+) {
     let _ = app.emit(
         "launch-progress",
         DownloadProgress {

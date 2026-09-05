@@ -86,6 +86,14 @@ pub struct ModSearchResult {
     pub author: String,
     pub downloads: u64,
     pub icon_url: Option<String>,
+    /// Whether this project already has a file present in the instance
+    /// (matched by hash, same as `install_mod`'s own already-installed
+    /// check).
+    pub installed: bool,
+    /// `None` when not installed; otherwise whether the installed file is
+    /// still the latest version compatible with this instance's game
+    /// version/loader.
+    pub up_to_date: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -304,6 +312,44 @@ pub async fn apply_update(
     Ok(())
 }
 
+/// Like `installed_project_ids`/`installed_resourcepack_project_ids`, but
+/// keyed by project id and keeping the matched version itself (not just its
+/// id) - `search_projects` needs the version id to tell whether an
+/// already-installed project's file is still the latest compatible version.
+async fn installed_versions_matching(
+    client: &reqwest::Client,
+    dir: &Path,
+    matches: impl Fn(&str) -> bool,
+) -> anyhow::Result<HashMap<String, ModrinthVersion>> {
+    let mut hashes = Vec::new();
+    if dir.exists() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let lower = entry.file_name().to_string_lossy().to_lowercase();
+            if matches(&lower) {
+                hashes.push(sha1_hex_file(&entry.path())?);
+            }
+        }
+    }
+    if hashes.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let body = serde_json::json!({ "hashes": hashes, "algorithm": "sha1" });
+    let resp = client
+        .post(format!("{MODRINTH_BASE}/version_files"))
+        .json(&body)
+        .send()
+        .await?;
+    let resp = ensure_success(resp, "Looking up installed files on Modrinth").await?;
+    let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
+    Ok(matched.into_values().map(|v| (v.project_id.clone(), v)).collect())
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn search_projects(
     client: &reqwest::Client,
     query: &str,
@@ -311,6 +357,8 @@ async fn search_projects(
     loader: Option<&str>,
     project_type: &str,
     offset: u32,
+    installed_dir: &Path,
+    installed_file_matches: impl Fn(&str) -> bool,
 ) -> anyhow::Result<ModSearchPage> {
     let mut facets = vec![format!("[\"versions:{game_version}\"]"), format!("[\"project_type:{project_type}\"]")];
     if let Some(l) = loader {
@@ -332,22 +380,36 @@ async fn search_projects(
     let resp = ensure_success(resp, "Searching Modrinth").await?;
     let parsed: ModrinthSearchResponse = resp.json().await?;
 
-    Ok(ModSearchPage {
-        total_hits: parsed.total_hits,
-        hits: parsed
-            .hits
-            .into_iter()
-            .map(|h| ModSearchResult {
-                project_id: h.project_id,
-                slug: h.slug,
-                title: h.title,
-                description: h.description,
-                author: h.author,
-                downloads: h.downloads,
-                icon_url: h.icon_url,
-            })
-            .collect(),
-    })
+    // Only worth checking "is this the latest version" for hits that are
+    // actually installed - typically a handful (or none) out of a page of
+    // 20, so this stays cheap even though it's one extra request per hit.
+    let installed = installed_versions_matching(client, installed_dir, installed_file_matches)
+        .await
+        .unwrap_or_default();
+
+    let mut hits = Vec::with_capacity(parsed.hits.len());
+    for h in parsed.hits {
+        let current = installed.get(&h.project_id);
+        let up_to_date = if let Some(current) = current {
+            let latest = fetch_latest_compatible(client, &h.project_id, game_version, loader).await.unwrap_or(None);
+            Some(latest.map_or(true, |l| l.id == current.id))
+        } else {
+            None
+        };
+        hits.push(ModSearchResult {
+            project_id: h.project_id,
+            slug: h.slug,
+            title: h.title,
+            description: h.description,
+            author: h.author,
+            downloads: h.downloads,
+            icon_url: h.icon_url,
+            installed: current.is_some(),
+            up_to_date,
+        });
+    }
+
+    Ok(ModSearchPage { total_hits: parsed.total_hits, hits })
 }
 
 pub async fn search_mods(
@@ -356,8 +418,12 @@ pub async fn search_mods(
     game_version: &str,
     loader: Option<&str>,
     offset: u32,
+    mods_dir: &Path,
 ) -> anyhow::Result<ModSearchPage> {
-    search_projects(client, query, game_version, loader, "mod", offset).await
+    search_projects(client, query, game_version, loader, "mod", offset, mods_dir, |lower| {
+        lower.ends_with(".jar") || lower.ends_with(".jar.disabled")
+    })
+    .await
 }
 
 /// Resource packs have no mod loader, so there's no `loader` parameter here -
@@ -367,8 +433,12 @@ pub async fn search_resourcepacks(
     query: &str,
     game_version: &str,
     offset: u32,
+    resourcepacks_dir: &Path,
 ) -> anyhow::Result<ModSearchPage> {
-    search_projects(client, query, game_version, None, "resourcepack", offset).await
+    search_projects(client, query, game_version, None, "resourcepack", offset, resourcepacks_dir, |lower| {
+        lower.ends_with(".zip")
+    })
+    .await
 }
 
 async fn fetch_project_info(client: &reqwest::Client, project_id: &str) -> anyhow::Result<ModrinthProject> {
@@ -611,10 +681,15 @@ async fn installed_resourcepack_project_ids(
 
 /// Installs a resource pack. Unlike mods, resource packs have no loader and
 /// (in practice) no dependency graph worth resolving, so this is a single
-/// download rather than `install_mod`'s recursive walk.
+/// download rather than `install_mod`'s recursive walk. Also switches it on
+/// in `options.txt` - unlike mods (enabled just by not having a
+/// `.disabled` suffix), a resource pack sitting in the folder isn't active
+/// in-game until it's added to the `resourcePacks` list, so leaving this out
+/// would install a pack that looks present but silently does nothing.
 pub async fn install_resourcepack(
     client: &reqwest::Client,
     resourcepacks_dir: &Path,
+    game_dir: &Path,
     game_version: &str,
     project_id: &str,
 ) -> anyhow::Result<InstalledModInfo> {
@@ -640,6 +715,7 @@ pub async fn install_resourcepack(
     let resp = ensure_success(resp, "Downloading resource pack").await?;
     let bytes = resp.bytes().await?;
     std::fs::write(resourcepacks_dir.join(&file.filename), &bytes)?;
+    let _ = super::resourcepacks::set_resourcepack_enabled(game_dir, &file.filename, true);
 
     let title = fetch_project_info(client, project_id)
         .await

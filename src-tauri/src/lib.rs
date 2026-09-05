@@ -11,7 +11,31 @@ mod settings;
 mod state;
 
 use state::AppState;
+use std::path::PathBuf;
 use tauri::Manager;
+
+/// The folder next to the running executable, if it's carrying a
+/// `portable.txt` marker - dropped there by the portable release zip (see
+/// "Package portable Windows build" in .github/workflows/build.yml). `None`
+/// means this is a normal installed build. Also used by the portable
+/// self-updater in `commands::updater`.
+pub fn portable_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?.to_path_buf();
+    exe_dir.join("portable.txt").is_file().then_some(exe_dir)
+}
+
+/// Picks where the app stores its data (instances, settings, accounts,
+/// backgrounds - everything under `AppState::data_dir`). Portable mode
+/// (see `portable_root`) keeps data in a `data` folder next to the exe
+/// instead of the normal per-OS app data directory, so moving/copying that
+/// folder brings everything with it and leaves nothing on the host machine.
+fn resolve_data_dir(app: &tauri::App) -> PathBuf {
+    match portable_root() {
+        Some(root) => root.join("data"),
+        None => app.path().app_data_dir().expect("failed to resolve app data dir"),
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,16 +45,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("failed to resolve app data dir");
+            let data_dir = resolve_data_dir(app);
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState::new(data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::instances::list_instances,
+            commands::instances::reorder_instances,
             commands::instances::create_instance,
             commands::instances::delete_instance,
             commands::instances::get_instance,
@@ -70,6 +92,13 @@ pub fn run() {
             commands::versions::get_fabric_loader_versions,
             commands::auth::get_settings,
             commands::auth::set_microsoft_client_id,
+            commands::appearance::set_background_theme,
+            commands::appearance::set_theme_opacity,
+            commands::appearance::add_custom_background,
+            commands::appearance::rename_custom_background,
+            commands::appearance::list_custom_backgrounds,
+            commands::appearance::get_custom_background,
+            commands::appearance::remove_custom_background,
             commands::auth::get_active_profile,
             commands::auth::sign_out,
             commands::auth::login_offline,
@@ -85,6 +114,10 @@ pub fn run() {
             commands::auth::get_player_skin_url,
             commands::launch::launch_instance,
             commands::launch::stop_instance,
+            commands::launch::list_running_instances,
+            commands::updater::is_portable,
+            commands::updater::check_portable_update,
+            commands::updater::install_portable_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 use crate::instance::{self, Instance, ModLoader};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -11,6 +12,7 @@ pub enum LauncherKind {
     Official,
     MultiMc,
     CurseForge,
+    Modrinth,
 }
 
 /// One importable "instance" found while scanning a folder the user picked.
@@ -65,6 +67,11 @@ pub fn suggest_paths() -> Vec<SuggestedPath> {
             candidates.push(("Prism Launcher", appdata.join("PrismLauncher")));
             candidates.push(("PolyMC", appdata.join("PolyMC")));
             candidates.push(("MultiMC", appdata.join("MultiMC")));
+            // The app's data folder was renamed from the old `com.modrinth.theseus`
+            // identifier to `ModrinthApp` in v0.8.0 - check both so older installs
+            // that haven't been touched since still get picked up.
+            candidates.push(("Modrinth App", appdata.join("ModrinthApp")));
+            candidates.push(("Modrinth App", appdata.join("com.modrinth.theseus")));
         }
         candidates.push(("CurseForge", home.join("curseforge").join("minecraft").join("Instances")));
     }
@@ -74,6 +81,8 @@ pub fn suggest_paths() -> Vec<SuggestedPath> {
         candidates.push(("Official Minecraft Launcher", support.join("minecraft")));
         candidates.push(("Prism Launcher", support.join("PrismLauncher")));
         candidates.push(("PolyMC", support.join("PolyMC")));
+        candidates.push(("Modrinth App", support.join("ModrinthApp")));
+        candidates.push(("Modrinth App", support.join("com.modrinth.theseus")));
         candidates.push((
             "CurseForge",
             home.join("Documents").join("curseforge").join("minecraft").join("Instances"),
@@ -89,6 +98,8 @@ pub fn suggest_paths() -> Vec<SuggestedPath> {
         candidates.push(("Prism Launcher", local_share.join("PrismLauncher")));
         candidates.push(("PolyMC", local_share.join("PolyMC")));
         candidates.push(("MultiMC", local_share.join("multimc")));
+        candidates.push(("Modrinth App", local_share.join("ModrinthApp")));
+        candidates.push(("Modrinth App", local_share.join("com.modrinth.theseus")));
 
         // Flatpak sandboxes each app's data under ~/.var/app/<id>/ instead
         // of the usual XDG locations - a very common way to have Minecraft
@@ -134,6 +145,15 @@ pub fn scan(path: &Path) -> anyhow::Result<Vec<ImportCandidate>> {
         scan_multimc_instance(path).into_iter().collect()
     } else if path.join("minecraftinstance.json").is_file() {
         scan_curseforge_instance(path).into_iter().collect()
+    } else if path.join("app.db").is_file() {
+        scan_modrinth(path)
+    } else if path.file_name().and_then(|n| n.to_str()) == Some("profiles")
+        && path.parent().is_some_and(|p| p.join("app.db").is_file())
+    {
+        // Mirrors how a MultiMC/CurseForge "instances" folder can be picked
+        // directly - a user browsing into Modrinth App's `profiles` folder
+        // itself should work the same as picking its parent.
+        scan_modrinth(path.parent().unwrap())
     } else {
         let instances_subdir = path.join("instances");
         let mut out = if instances_subdir.is_dir() {
@@ -147,7 +167,8 @@ pub fn scan(path: &Path) -> anyhow::Result<Vec<ImportCandidate>> {
         if out.is_empty() {
             anyhow::bail!(
                 "Couldn't recognize a supported launcher here. Pick your .minecraft folder, a \
-                 Prism/PolyMC/MultiMC \"instances\" folder, or a CurseForge \"Instances\" folder."
+                 Prism/PolyMC/MultiMC \"instances\" folder, a CurseForge \"Instances\" folder, or \
+                 the Modrinth App folder."
             );
         }
         out
@@ -376,6 +397,115 @@ fn scan_curseforge_instance(dir: &Path) -> Option<ImportCandidate> {
         icon_base64: None,
         size_bytes: 0,
     })
+}
+
+struct ModrinthRow {
+    /// Folder name under `profiles/` - joined onto the base dir with
+    /// `PathBuf::join`, which also happens to do the right thing if a future
+    /// app version ever stores an absolute path here instead.
+    path: String,
+    name: String,
+    icon_path: Option<String>,
+    game_version: String,
+    loader: String,
+    loader_version: Option<String>,
+}
+
+/// Modrinth App (codename "Theseus") has changed its metadata storage more
+/// than once - very old installs kept a `profiles` table with all instance
+/// fields directly on it, while current versions split that into an
+/// `instances` table plus a separate `instance_content_sets` table (an
+/// instance's game version/loader live on whichever content set it has
+/// applied). Both queries are tried, newest first, so this keeps working
+/// across that migration without knowing which one a given install is on.
+fn run_modrinth_query(conn: &Connection, sql: &str) -> rusqlite::Result<Vec<ModrinthRow>> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows_iter = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows_iter.next()? {
+        out.push(ModrinthRow {
+            path: row.get(0)?,
+            name: row.get(1)?,
+            icon_path: row.get(2)?,
+            game_version: row.get(3)?,
+            loader: row.get(4)?,
+            loader_version: row.get(5)?,
+        });
+    }
+    Ok(out)
+}
+
+fn read_modrinth_db(db_path: &Path) -> anyhow::Result<Vec<ModrinthRow>> {
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+
+    if let Ok(rows) = run_modrinth_query(
+        &conn,
+        "SELECT i.path, i.name, i.icon_path, cs.game_version, cs.loader, cs.loader_version \
+         FROM instances i JOIN instance_content_sets cs ON cs.id = i.applied_content_set_id",
+    ) {
+        return Ok(rows);
+    }
+
+    let rows = run_modrinth_query(
+        &conn,
+        "SELECT path, name, icon_path, game_version, mod_loader, mod_loader_version FROM profiles",
+    )?;
+    Ok(rows)
+}
+
+fn modrinth_loader(raw: &str) -> ModLoader {
+    match raw {
+        "fabric" => ModLoader::Fabric,
+        "forge" => ModLoader::Forge,
+        "quilt" => ModLoader::Quilt,
+        // NeoForge isn't a loader Mint can launch anything with - importing
+        // it as Forge would just fail at launch, so fall back to vanilla
+        // instead (the mod files still get copied over, inert until the
+        // user notices and sorts out loader support themselves).
+        _ => ModLoader::Vanilla,
+    }
+}
+
+/// `base_dir` is Modrinth App's own data folder (the one holding `app.db`
+/// and a `profiles` subfolder) - never the `profiles` subfolder itself.
+/// Returns an empty list rather than an error for anything that goes wrong
+/// reading the database, since a version/schema mismatch shouldn't block
+/// scanning entirely - it should just find nothing, same as an empty folder.
+fn scan_modrinth(base_dir: &Path) -> Vec<ImportCandidate> {
+    let Ok(rows) = read_modrinth_db(&base_dir.join("app.db")) else {
+        return Vec::new();
+    };
+
+    let profiles_dir = base_dir.join("profiles");
+    let mut out = Vec::new();
+    for row in rows {
+        let content_dir = profiles_dir.join(&row.path);
+        if !content_dir.is_dir() {
+            continue;
+        }
+        let loader = modrinth_loader(&row.loader);
+        let loader_version = if loader == ModLoader::Vanilla { None } else { row.loader_version };
+        let icon_base64 = row.icon_path.as_deref().and_then(|p| {
+            let icon_file = if Path::new(p).is_absolute() { PathBuf::from(p) } else { content_dir.join(p) };
+            let data = fs::read(icon_file).ok()?;
+            instance::sniff_image_mime(&data)?;
+            Some(STANDARD.encode(&data))
+        });
+
+        out.push(ImportCandidate {
+            launcher: LauncherKind::Modrinth,
+            name: row.name,
+            source_path: content_dir.to_string_lossy().into_owned(),
+            minecraft_dir: content_dir.to_string_lossy().into_owned(),
+            version_id: row.game_version,
+            loader,
+            loader_version,
+            icon_base64,
+            size_bytes: 0,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
 }
 
 /// Walks `CONTENT_DIRS`/`CONTENT_FILES` under a `.minecraft`-equivalent

@@ -24,7 +24,7 @@ export function InstanceIcon({ instance, className }: Props) {
   }, [instance.id, instance.hasIcon]);
 
   if (dataUrl) {
-    return <img className={className} src={dataUrl} alt="" />;
+    return <img className={className} src={dataUrl} alt="" draggable={false} />;
   }
   return <div className={className}>{instance.name.slice(0, 1).toUpperCase()}</div>;
 }

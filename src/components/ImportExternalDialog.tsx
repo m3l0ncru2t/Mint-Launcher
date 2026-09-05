@@ -13,6 +13,7 @@ const LAUNCHER_LABELS: Record<ImportCandidate["launcher"], string> = {
   official: "Official Launcher",
   multiMc: "MultiMC / Prism / PolyMC",
   curseForge: "CurseForge",
+  modrinth: "Modrinth App",
 };
 
 function formatSize(bytes: number): string {
@@ -33,6 +34,8 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
   const [statuses, setStatuses] = useState<Record<number, { status: RowStatus; error?: string }>>({});
   const [importing, setImporting] = useState(false);
   const [currentProgress, setCurrentProgress] = useState<ImportProgressEvent | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   useEffect(() => {
     api.suggestLauncherPaths().then(setSuggestions).catch(() => {});
@@ -73,6 +76,24 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
     scan(path);
   }
 
+  async function handleRestoreBackup() {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Mint Launcher Backup", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    setRestoreError(null);
+    setRestoring(true);
+    try {
+      const inst = await api.importInstance(path);
+      onImported(inst.id);
+    } catch (e) {
+      setRestoreError(String(e));
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   function toggle(index: number) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -111,39 +132,50 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-        <h3>Import from another launcher</h3>
+        <h3>Import instance</h3>
         <div className="subtitle">
-          Bring over worlds, mods, resource packs, and server lists from the official launcher, MultiMC-family
-          launchers (MultiMC, Prism Launcher, PolyMC), or CurseForge.
+          Restore a Mint Launcher backup, or bring over worlds, mods, resource packs, and server lists from the
+          official launcher, MultiMC-family launchers (MultiMC, Prism Launcher, PolyMC), CurseForge, or the Modrinth
+          App.
         </div>
 
         {!candidates && (
-          <div className="form-field">
-            <label>Where is it installed?</label>
-            {suggestions.length > 0 && (
-              <div className="import-suggestions">
-                {suggestions.map((s) => (
-                  <button
-                    key={s.path}
-                    type="button"
-                    className="ghost-btn small"
-                    disabled={scanning}
-                    onClick={() => scan(s.path)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            <button className="primary-btn" style={{ width: "100%", marginTop: 10 }} onClick={handleBrowse} disabled={scanning}>
-              {scanning ? "Scanning…" : "Browse for a folder…"}
-            </button>
-            <div className="hint">
-              Pick your <code>.minecraft</code> folder, a Prism/PolyMC/MultiMC "instances" folder, or a CurseForge
-              "Instances" folder.
+          <>
+            <div className="form-field">
+              <label>Have a Mint Launcher backup?</label>
+              <button className="ghost-btn" style={{ width: "100%" }} onClick={handleRestoreBackup} disabled={restoring}>
+                {restoring ? "Restoring…" : "Restore backup (.zip)…"}
+              </button>
+              {restoreError && <div className="error-text">{restoreError}</div>}
             </div>
-            {scanError && <div className="error-text">{scanError}</div>}
-          </div>
+
+            <div className="form-field">
+              <label>Or import from another launcher</label>
+              {suggestions.length > 0 && (
+                <div className="import-suggestions">
+                  {suggestions.map((s) => (
+                    <button
+                      key={s.path}
+                      type="button"
+                      className="ghost-btn small"
+                      disabled={scanning}
+                      onClick={() => scan(s.path)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button className="primary-btn" style={{ width: "100%", marginTop: 10 }} onClick={handleBrowse} disabled={scanning}>
+                {scanning ? "Scanning…" : "Browse for a folder…"}
+              </button>
+              <div className="hint">
+                Pick your <code>.minecraft</code> folder, a Prism/PolyMC/MultiMC "instances" folder, a CurseForge
+                "Instances" folder, or the Modrinth App's data folder.
+              </div>
+              {scanError && <div className="error-text">{scanError}</div>}
+            </div>
+          </>
         )}
 
         {candidates && (

@@ -1,16 +1,49 @@
 # Mint Launcher
 
-A custom Minecraft launcher built with Tauri (Rust) + React/TypeScript.
+A fast, clean, open-source Minecraft launcher. Manage multiple instances, browse and install
+mods/resource packs from Modrinth, sign in with a real Microsoft account or play offline, and
+bring your existing setup over from the official launcher, Prism/MultiMC/PolyMC, CurseForge, or
+the Modrinth App.
 
-## Status
+<!-- TODO: add a screenshot or two here -->
 
-- Instance management (create/list/delete, each with its own game dir, mods folder, natives, memory setting)
-- Vanilla version listing + download (client jar, libraries, assets) with SHA1 verification
-- Offline accounts (local play) and real Microsoft account login (browser sign-in via OAuth2 authorization code + PKCE)
-- Live launch progress + game log streaming to the UI
-- Mod loaders (Fabric/Forge/Quilt) - data model is in place, installers not wired up yet
+## Download
 
-## Setup
+Grab the latest build from the [Releases page](https://github.com/m3l0ncru2t/Mint-Launcher/releases/latest):
+
+- **Windows** - installer (`.exe`), or a portable `.zip` if you'd rather not install anything (keeps
+  all its data next to the exe, so the whole folder can live on a USB stick)
+- **macOS** - `.dmg`
+- **Linux** - `.AppImage` or `.deb`
+
+> **Note:** Mint Launcher isn't code-signed yet, so Windows SmartScreen or your browser may warn
+> you about it on first run ("Windows protected your PC"). Click "More info" → "Run anyway". This
+> is normal for a new, independently-published app and will go away once signing is set up.
+
+You do **not** need Java installed beforehand - if your system doesn't have a compatible JDK, Mint
+Launcher downloads the right one automatically the first time you launch an instance that needs it.
+
+## Features
+
+- **Instances** - each with its own mods, resource packs, saves, and settings; drag to reorder
+- **Modrinth integration** - search and install mods/resource packs, check for and apply updates
+- **Accounts** - real Microsoft sign-in (Xbox Live/XSTS/Minecraft services) or offline play, with
+  support for multiple saved accounts and per-instance account binding
+- **Import** - bring in instances from the official launcher, Prism/MultiMC/PolyMC, CurseForge, or
+  the Modrinth App, or restore a Mint Launcher backup
+- **Automatic Java** - detects the Java version each Minecraft release needs and downloads a
+  matching runtime for you if one isn't already available
+- **Live console** - streamed game output with a one-click copy button, and automatic crash hints
+  for common failure causes
+- **Custom themes and backgrounds**
+- **Auto-updating** - both the installed and portable builds check for and install updates
+
+## Requirements
+
+- Windows 10+, macOS 11+, or a reasonably modern Linux distro
+- Nothing else - Java is handled for you (see above)
+
+## Building from source
 
 ### 1. One-time system dependencies (Linux only)
 
@@ -51,8 +84,15 @@ Settings - just be aware you may hit the same rejection on a brand-new app:
 4. Under Authentication → Advanced settings, enable "Allow public client flows".
 5. Copy the "Application (client) ID" from the Overview page and paste it into Mint Launcher's Settings.
 
-A Java Development Kit (JDK 17+ for modern Minecraft, JDK 8 for old versions) must be installed and on `PATH` - Mint Launcher does not bundle or auto-download a JVM yet.
-
-## Recommended IDE Setup
+### Recommended IDE Setup
 
 - [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+
+## Status
+
+Vanilla and Fabric instances are fully playable. Forge and Quilt are modeled in the data layer but
+their installers aren't wired up yet.
+
+## License
+
+[GPL-3.0](LICENSE)

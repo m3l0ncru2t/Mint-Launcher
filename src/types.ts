@@ -23,6 +23,7 @@ export interface ServerStatus {
 
 export interface Instance {
   id: string;
+  dirName: string;
   name: string;
   versionId: string;
   loader: ModLoader;
@@ -33,6 +34,7 @@ export interface Instance {
   javaArgs: string | null;
   accountId: string | null;
   hasIcon: boolean;
+  sortOrder: number;
 }
 
 export interface VersionManifestEntry {
@@ -75,14 +77,33 @@ export interface ProfileDetails {
   capes: CapeInfo[];
 }
 
+export interface ThemeOpacity {
+  sidebar: number;
+  modsPanel: number;
+}
+
 export interface Settings {
   offlineUsername: string | null;
   microsoftClientId: string | null;
+  backgroundTheme: string | null;
+  themeOpacity: Record<string, ThemeOpacity>;
+  customBackgroundNames: Record<string, string>;
+}
+
+export interface CustomBackgroundInfo {
+  id: string;
+  name: string;
+}
+
+export interface PortableUpdateInfo {
+  version: string;
+  notes: string;
+  downloadUrl: string;
 }
 
 export interface LaunchProgressEvent {
   instanceId: string;
-  stage: "client" | "libraries" | "assets" | "launching" | "exited" | "error";
+  stage: "java" | "client" | "libraries" | "assets" | "launching" | "running" | "exited" | "error";
   message: string;
   current: number;
   total: number;
@@ -91,6 +112,20 @@ export interface LaunchProgressEvent {
 export interface InstanceLogEvent {
   instanceId: string;
   line: string;
+}
+
+export interface RunningInstance {
+  pid: number;
+  accountUuid: string;
+  accountUsername: string;
+}
+
+export interface InstanceRunningEvent {
+  instanceId: string;
+  running: boolean;
+  pid?: number;
+  accountUuid?: string;
+  accountUsername?: string;
 }
 
 export interface ModFile {
@@ -129,6 +164,8 @@ export interface ModSearchResult {
   author: string;
   downloads: number;
   iconUrl: string | null;
+  installed: boolean;
+  upToDate: boolean | null;
 }
 
 export interface ModSearchPage {
@@ -196,7 +233,7 @@ export interface FabricLoaderInfo {
   stable: boolean;
 }
 
-export type LauncherKind = "official" | "multiMc" | "curseForge";
+export type LauncherKind = "official" | "multiMc" | "curseForge" | "modrinth";
 
 export interface SuggestedPath {
   label: string;

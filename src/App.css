@@ -14,6 +14,7 @@
   --text-1: #b7c2c0;
   --text-2: #7c8a88;
   --danger: #f87171;
+  --warning: #f2b84b;
 
   color-scheme: dark;
   font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -31,7 +32,11 @@ body,
 }
 
 body {
-  background: var(--bg-0);
+  background-color: var(--bg-0);
+  background-image: none;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   color: var(--text-0);
 }
 
@@ -115,7 +120,9 @@ button {
 /* ---------- Sidebar ---------- */
 
 .sidebar {
-  background: var(--bg-1);
+  background: rgb(27 32 35 / var(--sidebar-alpha, 0.82));
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -134,7 +141,8 @@ button {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  background: linear-gradient(135deg, var(--mint-400), var(--mint-600));
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .sidebar-header h1 {
@@ -181,6 +189,22 @@ button {
   border-color: var(--mint-500);
 }
 
+.instance-row.dragging {
+  opacity: 0.5;
+}
+
+.instance-row.drag-over {
+  border-color: var(--mint-500);
+}
+
+.drag-handle {
+  flex-shrink: 0;
+  color: var(--text-2);
+  cursor: grab;
+  font-size: 13px;
+  line-height: 1;
+}
+
 .instance-icon {
   width: 32px;
   height: 32px;
@@ -210,6 +234,36 @@ button {
 .instance-row-meta {
   font-size: 11px;
   color: var(--text-2);
+}
+
+.instance-row-running {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--mint-400);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mint-400);
+  flex-shrink: 0;
+  animation: running-dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes running-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .empty-hint {
@@ -339,7 +393,25 @@ button {
 }
 
 .account-menu-row.selected {
+  color: var(--text-0);
+}
+
+.account-menu-row:not(.selected) {
   color: var(--mint-400);
+}
+
+.account-menu-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--mint-400);
+  flex-shrink: 0;
 }
 
 .account-menu-name {
@@ -545,7 +617,12 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-1);
+  /* No backdrop-filter here (unlike .sidebar) - this panel hosts the
+     Browse Mods/Resource Packs dialogs as normal DOM children, and a
+     filter/backdrop-filter on an ancestor turns it into the containing
+     block for their `position: fixed` overlay, clipping them to this
+     panel's bounds instead of the full window. */
+  background: rgb(27 32 35 / var(--mods-panel-alpha, 0.82));
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
@@ -734,6 +811,16 @@ button {
   margin-bottom: 6px;
 }
 
+.crash-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(242, 184, 75, 0.12);
+  border: 1px solid rgba(242, 184, 75, 0.3);
+  color: var(--warning);
+  font-size: 12.5px;
+}
+
 .progress-bar-track {
   height: 6px;
   border-radius: 999px;
@@ -759,6 +846,26 @@ button {
 .field-row input[type="range"] {
   flex: 1;
   accent-color: var(--mint-500);
+}
+
+.log-console-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.log-console-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.log-console-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
 .log-console {
@@ -873,6 +980,129 @@ button {
 .instance-icon-editor-actions {
   display: flex;
   gap: 8px;
+}
+
+.theme-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 10px;
+}
+
+.theme-swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.theme-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background-color: var(--bg-2);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.theme-swatch:hover {
+  border-color: var(--text-2);
+}
+
+.theme-swatch.selected {
+  border-color: var(--mint-500);
+}
+
+.theme-swatch.selected::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.theme-swatch-label {
+  font-size: 10px;
+  color: var(--text-2);
+  text-align: center;
+  margin-top: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-swatch-label-editable {
+  cursor: text;
+}
+
+.theme-swatch-label-editable:hover {
+  color: var(--mint-400);
+  text-decoration: underline;
+}
+
+.theme-swatch-rename-input {
+  width: 100%;
+  margin-top: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--mint-500);
+  color: var(--text-0);
+  font-size: 10px;
+  text-align: center;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.theme-swatch-custom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  font-size: 18px;
+}
+
+.theme-swatch-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.theme-swatch-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.theme-swatch-remove:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+.form-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--mint-500);
 }
 
 .form-field input[type="text"],
@@ -1106,6 +1336,10 @@ button {
   margin-top: 4px;
 }
 
+.mod-search-installed.outdated {
+  color: var(--warning);
+}
+
 .server-list {
   max-height: 260px;
   overflow-y: auto;
@@ -1135,6 +1369,29 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.server-name:hover {
+  border-bottom-color: var(--text-2);
+}
+
+.server-name-input {
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+  padding: 0 0 1px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--mint-500);
+  color: var(--text-0);
+}
+
+.server-name-input:focus {
+  outline: none;
 }
 
 .server-address {
@@ -1289,7 +1546,6 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-0);
 }
 
 .login-card {
@@ -1302,10 +1558,11 @@ button {
 }
 
 .login-card .logo {
+  display: block;
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--mint-400), var(--mint-600));
+  object-fit: cover;
   margin: 0 auto 14px;
 }
 

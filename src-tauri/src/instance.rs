@@ -39,6 +39,17 @@ pub struct ServerEntry {
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
     pub id: String,
+    /// The instance folder's name on disk - a sanitized, deduplicated form
+    /// of `name` chosen once at creation (see `unique_dir_name`), so the
+    /// instances folder shows real names instead of raw ids. Deliberately
+    /// not kept in sync with later renames (see `Instance::dir`): an
+    /// in-progress game has this as its working directory, and racing a
+    /// rename against a running JVM is worse than a stale folder name.
+    /// `#[serde(default)]` makes this empty for instances saved before this
+    /// field existed - `dir()` treats that as "folder is named after `id`",
+    /// which is exactly how those old instances were actually laid out.
+    #[serde(default)]
+    pub dir_name: String,
     pub name: String,
     pub version_id: String,
     pub loader: ModLoader,
@@ -62,11 +73,23 @@ pub struct Instance {
     /// `list_instances` payload.
     #[serde(default)]
     pub has_icon: bool,
+    /// Manual sort position for the sidebar list. Instances that have never
+    /// been dragged all default to 0 (via `serde(default)`) and fall back to
+    /// sorting by name among themselves; `reorder_instances` assigns 0..n
+    /// sequential values on an explicit drag-and-drop reorder. New instances
+    /// get a millisecond timestamp (see `create_instance`) so they land after
+    /// any explicitly-ordered ones instead of jumping to the top.
+    #[serde(default)]
+    pub sort_order: i64,
 }
 
 impl Instance {
     pub fn dir(&self, instances_root: &Path) -> PathBuf {
-        instances_root.join(&self.id)
+        if self.dir_name.is_empty() {
+            instances_root.join(&self.id)
+        } else {
+            instances_root.join(&self.dir_name)
+        }
     }
 
     pub fn game_dir(&self, instances_root: &Path) -> PathBuf {
@@ -123,8 +146,72 @@ pub fn list_instances(instances_root: &Path) -> std::io::Result<Vec<Instance>> {
             }
         }
     }
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by(|a, b| {
+        a.sort_order
+            .cmp(&b.sort_order)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(result)
+}
+
+/// Applies a manual sidebar order: `ordered_ids` should list every instance's
+/// id in the desired order (extra/missing ids are simply ignored/left alone).
+/// Assigns sequential `sort_order` values so a freshly created instance
+/// (which gets a large millisecond-timestamp `sort_order`, see
+/// `create_instance`) naturally lands after all of these instead of jumping
+/// to the top.
+pub fn reorder_instances(instances_root: &Path, ordered_ids: &[String]) -> std::io::Result<Vec<Instance>> {
+    for (i, id) in ordered_ids.iter().enumerate() {
+        if let Some(mut instance) = get_instance(instances_root, id)? {
+            instance.sort_order = i as i64;
+            instance.save(instances_root)?;
+        }
+    }
+    list_instances(instances_root)
+}
+
+/// Strips characters that aren't safe in a folder name on Windows/macOS/
+/// Linux, trims trailing dots/spaces (Windows rejects those), and avoids
+/// Windows' reserved device names - so any instance name, how ever exotic,
+/// produces a folder Explorer/Finder/the shell can actually create.
+fn sanitize_dir_name(name: &str) -> String {
+    let mut cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    while matches!(cleaned.chars().last(), Some('.') | Some(' ')) {
+        cleaned.pop();
+    }
+    cleaned.truncate(64);
+    let cleaned = cleaned.trim().to_string();
+
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if cleaned.is_empty() || RESERVED.contains(&cleaned.to_uppercase().as_str()) {
+        return "instance".to_string();
+    }
+    cleaned
+}
+
+/// Appends " (2)", " (3)", etc. until the folder name doesn't collide with
+/// an existing instance directory - the same convention Windows/macOS use
+/// for duplicate file names.
+fn unique_dir_name(instances_root: &Path, name: &str) -> String {
+    let base = sanitize_dir_name(name);
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while instances_root.join(&candidate).exists() {
+        candidate = format!("{base} ({n})");
+        n += 1;
+    }
+    candidate
 }
 
 pub fn create_instance(
@@ -136,6 +223,7 @@ pub fn create_instance(
 ) -> std::io::Result<Instance> {
     let instance = Instance {
         id: Uuid::new_v4().to_string(),
+        dir_name: unique_dir_name(instances_root, &name),
         name,
         version_id,
         loader,
@@ -146,26 +234,39 @@ pub fn create_instance(
         java_args: None,
         account_id: None,
         has_icon: false,
+        sort_order: chrono::Utc::now().timestamp_millis(),
     };
     instance.save(instances_root)?;
+
+    // Best-effort - a brand-new instance getting a seeded server list matters
+    // far less than instance creation itself succeeding.
+    let _ = crate::minecraft::servers_dat::write_servers(
+        &instance.game_dir(instances_root),
+        &[ServerEntry {
+            name: "MintyMC".to_string(),
+            address: "mintymc.xyz".to_string(),
+        }],
+    );
+
     Ok(instance)
 }
 
 pub fn delete_instance(instances_root: &Path, id: &str) -> std::io::Result<()> {
-    let dir = instances_root.join(id);
-    if dir.exists() {
-        fs::remove_dir_all(dir)?;
+    if let Some(inst) = get_instance(instances_root, id)? {
+        let dir = inst.dir(instances_root);
+        if dir.exists() {
+            fs::remove_dir_all(dir)?;
+        }
     }
     Ok(())
 }
 
+/// Instance folders are named after `dir_name` (see `unique_dir_name`), not
+/// `id`, so finding one by id means checking every folder's `instance.json`
+/// rather than joining the id straight onto a path - same approach as
+/// `list_instances`, which this delegates to.
 pub fn get_instance(instances_root: &Path, id: &str) -> std::io::Result<Option<Instance>> {
-    let meta_path = instances_root.join(id).join("instance.json");
-    if !meta_path.exists() {
-        return Ok(None);
-    }
-    let data = fs::read_to_string(meta_path)?;
-    Ok(serde_json::from_str(&data).ok())
+    Ok(list_instances(instances_root)?.into_iter().find(|i| i.id == id))
 }
 
 pub fn touch_last_played(instances_root: &Path, id: &str) -> std::io::Result<()> {
@@ -251,12 +352,13 @@ pub fn import_instance(instances_root: &Path, zip_path: &Path) -> anyhow::Result
     let mut inst: Instance =
         serde_json::from_slice(&meta_bytes).map_err(|_| anyhow::anyhow!("Not a valid Mint Launcher backup"))?;
 
-    let new_id = Uuid::new_v4().to_string();
-    inst.id = new_id.clone();
+    inst.id = Uuid::new_v4().to_string();
+    inst.dir_name = unique_dir_name(instances_root, &inst.name);
     inst.account_id = None;
     inst.last_played = None;
+    inst.sort_order = chrono::Utc::now().timestamp_millis();
 
-    let dest_dir = instances_root.join(&new_id);
+    let dest_dir = inst.dir(instances_root);
     fs::create_dir_all(dest_dir.join("game"))?;
 
     for i in 0..archive.len() {

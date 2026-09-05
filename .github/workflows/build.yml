@@ -45,6 +45,7 @@ jobs:
         run: npm install
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri-build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -52,7 +53,41 @@ jobs:
         with:
           tagName: mint-launcher-v__VERSION__
           releaseName: "Mint Launcher v__VERSION__"
-          releaseBody: "Test build - see the assets below for your platform."
-          releaseDraft: true
-          prerelease: true
+          releaseBody: |
+            A Minecraft launcher with instance management, Modrinth mod/resource pack browsing,
+            Microsoft and offline accounts, live console output, and automatic Java runtime
+            downloads (no need to install a JDK yourself).
+
+            Download the build for your platform below. Windows users: a portable, no-install
+            `.zip` is also attached alongside the installer.
+
+            Mint Launcher isn't code-signed yet, so Windows may show a SmartScreen warning
+            ("Windows protected your PC") on first run - click "More info" -> "Run anyway".
+
+            See the [README](https://github.com/m3l0ncru2t/Mint-Launcher#readme) for the full
+            feature list.
+          releaseDraft: false
+          prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Package portable Windows build
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $dest = "portable/Mint Launcher"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Copy-Item "src-tauri/target/release/mint-launcher.exe" -Destination "$dest/Mint Launcher.exe"
+          # Presence of this file is what switches the app into portable mode
+          # (see resolve_data_dir in src-tauri/src/lib.rs) - instances/settings
+          # then live in a "data" folder next to the exe instead of AppData.
+          New-Item -ItemType File -Path "$dest/portable.txt" -Force | Out-Null
+          Compress-Archive -Path "$dest/*" -DestinationPath "Mint-Launcher-portable-windows.zip"
+
+      - name: Upload portable build to release
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $uploadUrl = ("${{ steps.tauri-build.outputs.releaseUploadUrl }}" -replace '\{.*\}', '') + "?name=Mint-Launcher-portable-windows.zip"
+          curl.exe -sSL -X POST -H "Authorization: token $env:GITHUB_TOKEN" -H "Content-Type: application/zip" --data-binary "@Mint-Launcher-portable-windows.zip" $uploadUrl

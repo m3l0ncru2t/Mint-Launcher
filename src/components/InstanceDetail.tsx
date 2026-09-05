@@ -6,6 +6,33 @@ import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
 import type { Instance, LaunchProgressEvent } from "../types";
 
+const ACTIVE_STAGES = new Set(["java", "client", "libraries", "assets", "launching"]);
+
+/// A crash's actual cause is usually buried hundreds of lines up the
+/// console, well past what "exited with code N" tells you - matching a
+/// handful of well-known signatures against the tail of the log turns that
+/// into an actionable one-liner instead of a scavenger hunt.
+const CRASH_SIGNATURES: [RegExp, string][] = [
+  [/UnsupportedClassVersionError/, "This build of Java is too old for this Minecraft version - try relaunching so it can fetch a matching runtime."],
+  [/java\.lang\.OutOfMemoryError/, "Minecraft ran out of memory - try raising the memory limit in this instance's settings."],
+  [/Failed to find Main Class|NoClassDefFoundError|ClassNotFoundException/, "A required file failed to load - try Backup, then delete and reinstall the instance's mods."],
+  [/Pixel Format not accelerated|Couldn't set pixel format|NativeCreationException/, "The graphics driver rejected Minecraft's display setup - update your GPU driver."],
+  [/EXCEPTION_ACCESS_VIOLATION|A fatal error has been detected by the Java Runtime Environment/, "The JVM crashed at a low level, likely a broken mod or a graphics driver issue."],
+];
+
+function findCrashHint(logLines: string[]): string | null {
+  const tail = logLines.slice(-500).join("\n");
+  for (const [pattern, hint] of CRASH_SIGNATURES) {
+    if (pattern.test(tail)) return hint;
+  }
+  return null;
+}
+
+function parseExitCode(message: string): number | null {
+  const match = message.match(/exited with code (-?\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
 interface Props {
   instance: Instance;
   progress: LaunchProgressEvent | null;
@@ -25,12 +52,21 @@ export function InstanceDetail({
   onDismissProgress,
   canPlay,
 }: Props) {
-  const [launching, setLaunching] = useState(false);
+  // Only covers the brief gap between clicking Play and the first
+  // "launch-progress" event - actual play/stop button state is derived from
+  // `progress` (lifted up to App.tsx, keyed by instance id) instead, since
+  // `InstanceDetail` gets remounted (see `key={instance.id}` in App.tsx)
+  // every time the selected instance changes, which would otherwise reset
+  // local state back to "not running" when switching back to an instance
+  // that's still playing.
+  const [starting, setStarting] = useState(false);
   const [showServers, setShowServers] = useState(false);
   const [serverCount, setServerCount] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [showConsole, setShowConsole] = useState(false);
+  const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   function loadServerCount() {
@@ -51,20 +87,25 @@ export function InstanceDetail({
     }
   }, [logLines]);
 
+  // A launch failure or a non-zero exit almost always means something worth
+  // reading went to the console - pop it open automatically instead of
+  // leaving the user to notice it's hidden.
   useEffect(() => {
-    if (progress?.stage === "exited" || progress?.stage === "error") {
-      setLaunching(false);
+    if (progress?.stage === "error") {
+      setShowConsole(true);
+    } else if (progress?.stage === "exited" && parseExitCode(progress.message) !== 0) {
+      setShowConsole(true);
     }
   }, [progress]);
 
   async function handlePlay(serverAddress?: string) {
-    setLaunching(true);
+    setStarting(true);
     try {
       await api.launchInstance(instance.id, serverAddress);
     } catch {
       // surfaced via the launch-progress "error" event
     } finally {
-      setLaunching(false);
+      setStarting(false);
     }
   }
 
@@ -75,6 +116,12 @@ export function InstanceDetail({
     } catch (e) {
       setStopError(String(e));
     }
+  }
+
+  async function handleCopyConsole() {
+    await navigator.clipboard.writeText(logLines.join("\n"));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   }
 
   async function handleExport() {
@@ -96,7 +143,10 @@ export function InstanceDetail({
 
   const pct =
     progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
-  const isRunning = launching && progress?.stage === "launching";
+  const isBusy = starting || (progress ? ACTIVE_STAGES.has(progress.stage) : false);
+  const isRunning = progress?.stage === "running";
+  const crashHint =
+    progress?.stage === "exited" && parseExitCode(progress.message) !== 0 ? findCrashHint(logLines) : null;
 
   return (
     <div className="main-panel">
@@ -115,7 +165,7 @@ export function InstanceDetail({
             Delete
           </button>
           <button className="ghost-btn" onClick={handleExport} disabled={exporting}>
-            {exporting ? "Exporting…" : "Export"}
+            {exporting ? "Backing up…" : "Backup"}
           </button>
           <button className="ghost-btn" onClick={() => setShowServers(true)}>
             Servers{serverCount > 0 ? ` (${serverCount})` : ""}
@@ -125,8 +175,8 @@ export function InstanceDetail({
               Stop
             </button>
           ) : (
-            <button className="play-btn" onClick={() => handlePlay()} disabled={launching || !canPlay}>
-              {launching ? "Working…" : "Play"}
+            <button className="play-btn" onClick={() => handlePlay()} disabled={isBusy || !canPlay}>
+              {isBusy ? "Working…" : "Play"}
             </button>
           )}
         </div>
@@ -152,6 +202,7 @@ export function InstanceDetail({
             )}
             <div className="stage">{progress.stage}</div>
             {progress.message}
+            {crashHint && <div className="crash-hint">{crashHint}</div>}
             {progress.total > 1 && (
               <div className="progress-bar-track">
                 <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
@@ -162,13 +213,30 @@ export function InstanceDetail({
 
         <InstanceFilesPanel instanceId={instance.id} />
 
-        <div className="log-console" ref={logRef}>
-          {logLines.length === 0 ? (
-            <span className="placeholder">Game output will appear here once you hit Play.</span>
-          ) : (
-            logLines.join("\n")
-          )}
+        <div className="log-console-bar">
+          <span className="log-console-label">Console</span>
+          <div className="log-console-bar-actions">
+            <button
+              className="ghost-btn small"
+              onClick={handleCopyConsole}
+              disabled={logLines.length === 0}
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+            <button className="ghost-btn small" onClick={() => setShowConsole((s) => !s)}>
+              {showConsole ? "Hide" : "Show"}
+            </button>
+          </div>
         </div>
+        {showConsole && (
+          <div className="log-console" ref={logRef}>
+            {logLines.length === 0 ? (
+              <span className="placeholder">Game output will appear here once you hit Play.</span>
+            ) : (
+              logLines.join("\n")
+            )}
+          </div>
+        )}
       </div>
 
       {showServers && (
@@ -179,7 +247,7 @@ export function InstanceDetail({
             onChanged();
             loadServerCount();
           }}
-          joinDisabled={launching || !canPlay}
+          joinDisabled={isBusy || !canPlay}
           onJoin={(address) => {
             setShowServers(false);
             handlePlay(address);

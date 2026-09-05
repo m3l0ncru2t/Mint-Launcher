@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import appIcon from "../assets/app-icon.png";
 import { api } from "../api";
 import { useMicrosoftLogin } from "../hooks/useMicrosoftLogin";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -58,7 +59,7 @@ export function LoginScreen({ settings, onLoggedIn }: Props) {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <div className="logo" />
+        <img src={appIcon} alt="" className="logo" />
         <h2>Mint Launcher</h2>
         <div className="subtitle">Sign in to start playing</div>
 

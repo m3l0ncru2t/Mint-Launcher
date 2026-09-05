@@ -95,6 +95,7 @@ export function AccountSwitcher({ profile, onProfileChange, onSignOut }: Props) 
               className={`account-menu-row${a.id === profile.uuid ? " selected" : ""}`}
               onClick={() => handleSwitch(a.id)}
             >
+              <PlayerAvatar uuid={a.id} username={a.username} className="account-menu-avatar" size={20} />
               <span className="account-menu-name">{a.username}</span>
               {busyId === a.id && <span className="hint-inline">Switching…</span>}
               <button className="icon-btn" title="Remove account" onClick={(e) => handleRemove(a.id, e)}>

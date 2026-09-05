@@ -65,6 +65,12 @@ export function ServersDialog({ instance, onClose, onUpdated, onJoin, joinDisabl
     persist(servers.filter((_, i) => i !== index));
   }
 
+  function handleRename(index: number, newName: string) {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === servers[index].name) return;
+    persist(servers.map((s, i) => (i === index ? { ...s, name: trimmed } : s)));
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -89,6 +95,7 @@ export function ServersDialog({ instance, onClose, onUpdated, onJoin, joinDisabl
               joinDisabled={joinDisabled}
               onJoin={() => onJoin(s.address)}
               onRemove={() => handleRemove(i)}
+              onRename={(newName) => handleRename(i, newName)}
             />
           ))}
         </div>
@@ -128,12 +135,20 @@ interface ServerRowProps {
   joinDisabled: boolean;
   onJoin: () => void;
   onRemove: () => void;
+  onRename: (name: string) => void;
 }
 
-function ServerRow({ server, joinDisabled, onJoin, onRemove }: ServerRowProps) {
+function ServerRow({ server, joinDisabled, onJoin, onRemove, onRename }: ServerRowProps) {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [pinging, setPinging] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(server.name);
+
+  function commitRename() {
+    setEditingName(false);
+    onRename(draftName);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -162,7 +177,33 @@ function ServerRow({ server, joinDisabled, onJoin, onRemove }: ServerRowProps) {
         {status?.favicon ? <img src={status.favicon} alt="" /> : <div className="server-favicon-placeholder" />}
       </div>
       <div className="server-info">
-        <div className="server-name">{server.name}</div>
+        {editingName ? (
+          <input
+            className="server-name-input"
+            autoFocus
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                setDraftName(server.name);
+                setEditingName(false);
+              }
+            }}
+          />
+        ) : (
+          <div
+            className="server-name"
+            title="Click to rename"
+            onClick={() => {
+              setDraftName(server.name);
+              setEditingName(true);
+            }}
+          >
+            {server.name}
+          </div>
+        )}
         <div className="server-address">{server.address}</div>
         {pinging && <div className="server-motd hint-inline">Pinging…</div>}
         {!pinging && failed && <div className="server-motd server-offline">Offline or unreachable</div>}

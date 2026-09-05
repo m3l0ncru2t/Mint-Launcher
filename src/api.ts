@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountSummary,
+  CustomBackgroundInfo,
   FabricLoaderInfo,
   GameProfile,
   ImportCandidate,
@@ -13,9 +14,11 @@ import type {
   ModProjectDetails,
   ModSearchPage,
   ModUpdateInfo,
+  PortableUpdateInfo,
   ProfileDetails,
   ResourcePackDetails,
   ResourcePackFile,
+  RunningInstance,
   ServerEntry,
   ServerStatus,
   Settings,
@@ -25,6 +28,8 @@ import type {
 
 export const api = {
   listInstances: () => invoke<Instance[]>("list_instances"),
+
+  reorderInstances: (orderedIds: string[]) => invoke<Instance[]>("reorder_instances", { orderedIds }),
 
   createInstance: (name: string, versionId: string, loader: ModLoader, loaderVersion: string | null) =>
     invoke<Instance>("create_instance", { name, versionId, loader, loaderVersion }),
@@ -129,6 +134,22 @@ export const api = {
   setMicrosoftClientId: (clientId: string | null) =>
     invoke<void>("set_microsoft_client_id", { clientId }),
 
+  setBackgroundTheme: (theme: string | null) => invoke<void>("set_background_theme", { theme }),
+
+  setThemeOpacity: (themeId: string, sidebar: number, modsPanel: number) =>
+    invoke<void>("set_theme_opacity", { themeId, sidebar, modsPanel }),
+
+  addCustomBackground: (dataBase64: string, name: string) =>
+    invoke<string>("add_custom_background", { dataBase64, name }),
+
+  renameCustomBackground: (id: string, name: string) => invoke<void>("rename_custom_background", { id, name }),
+
+  listCustomBackgrounds: () => invoke<CustomBackgroundInfo[]>("list_custom_backgrounds"),
+
+  getCustomBackground: (id: string) => invoke<string | null>("get_custom_background", { id }),
+
+  removeCustomBackground: (id: string) => invoke<void>("remove_custom_background", { id }),
+
   getActiveProfile: () => invoke<GameProfile | null>("get_active_profile"),
 
   signOut: () => invoke<void>("sign_out"),
@@ -160,4 +181,13 @@ export const api = {
     invoke<number>("launch_instance", { instanceId, serverAddress: serverAddress ?? null }),
 
   stopInstance: (instanceId: string) => invoke<void>("stop_instance", { instanceId }),
+
+  listRunningInstances: () => invoke<Record<string, RunningInstance>>("list_running_instances"),
+
+  isPortable: () => invoke<boolean>("is_portable"),
+
+  checkPortableUpdate: () => invoke<PortableUpdateInfo | null>("check_portable_update"),
+
+  installPortableUpdate: (downloadUrl: string) =>
+    invoke<void>("install_portable_update", { downloadUrl }),
 };

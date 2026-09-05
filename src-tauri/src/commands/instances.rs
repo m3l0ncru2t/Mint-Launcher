@@ -44,6 +44,11 @@ pub fn list_instances(state: State<AppState>) -> Result<Vec<Instance>, String> {
 }
 
 #[tauri::command]
+pub fn reorder_instances(state: State<AppState>, ordered_ids: Vec<String>) -> Result<Vec<Instance>, String> {
+    instance::reorder_instances(&state.instances_dir(), &ordered_ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn create_instance(
     state: State<AppState>,
     name: String,
@@ -300,12 +305,14 @@ pub async fn search_mods(
     offset: u32,
 ) -> Result<crate::minecraft::modrinth::ModSearchPage, String> {
     let inst = resolve_instance(&state, &id)?;
+    let dir = inst.mods_dir(&state.instances_dir());
     crate::minecraft::modrinth::search_mods(
         &state.http,
         &query,
         &inst.version_id,
         inst.loader.modrinth_loader(),
         offset,
+        &dir,
     )
     .await
     .map_err(|e| e.to_string())
@@ -459,7 +466,8 @@ pub async fn search_resourcepacks(
     offset: u32,
 ) -> Result<crate::minecraft::modrinth::ModSearchPage, String> {
     let inst = resolve_instance(&state, &id)?;
-    crate::minecraft::modrinth::search_resourcepacks(&state.http, &query, &inst.version_id, offset)
+    let dir = inst.resourcepacks_dir(&state.instances_dir());
+    crate::minecraft::modrinth::search_resourcepacks(&state.http, &query, &inst.version_id, offset, &dir)
         .await
         .map_err(|e| e.to_string())
 }
@@ -472,7 +480,8 @@ pub async fn install_resourcepack(
 ) -> Result<crate::minecraft::modrinth::InstalledModInfo, String> {
     let inst = resolve_instance(&state, &id)?;
     let dir = inst.resourcepacks_dir(&state.instances_dir());
-    crate::minecraft::modrinth::install_resourcepack(&state.http, &dir, &inst.version_id, &project_id)
+    let game_dir = inst.game_dir(&state.instances_dir());
+    crate::minecraft::modrinth::install_resourcepack(&state.http, &dir, &game_dir, &inst.version_id, &project_id)
         .await
         .map_err(|e| e.to_string())
 }

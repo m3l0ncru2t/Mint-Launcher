@@ -29,6 +29,10 @@ export function ResourcePackProjectInfoDialog({
   const [details, setDetails] = useState<ModProjectDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const outdated = result.installed && result.upToDate === false && !installedMsg;
+  const alreadyInstalled = !!installedMsg || result.installed;
+  const statusText = installedMsg ?? (result.installed ? (outdated ? "Installed · update available" : "✓ Installed and up to date") : null);
+
   useEffect(() => {
     api
       .getResourcepackProjectInfo(instanceId, result.projectId)
@@ -56,6 +60,10 @@ export function ResourcePackProjectInfoDialog({
         </div>
 
         <div className="mod-info-desc">{details?.description ?? result.description}</div>
+
+        {statusText && (
+          <div className={`mod-search-installed${outdated ? " outdated" : ""}`}>{statusText}</div>
+        )}
 
         {error && <div className="error-text">{error}</div>}
 
@@ -91,10 +99,10 @@ export function ResourcePackProjectInfoDialog({
           </button>
           <button
             className="primary-btn"
-            disabled={installing || !!installedMsg}
+            disabled={installing || alreadyInstalled}
             onClick={() => onInstall(result.projectId)}
           >
-            {installedMsg ? "Installed" : installing ? "Installing…" : "Install"}
+            {alreadyInstalled ? "Installed" : installing ? "Installing…" : "Install"}
           </button>
         </div>
       </div>

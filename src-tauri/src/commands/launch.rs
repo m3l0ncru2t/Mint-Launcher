@@ -4,9 +4,11 @@ use crate::commands::auth::persist_account;
 use crate::instance::{self, ModLoader};
 use crate::minecraft::download;
 use crate::minecraft::fabric;
+use crate::minecraft::java;
 use crate::minecraft::launch::{self as mc_launch, LaunchContext};
 use crate::msa;
-use crate::state::AppState;
+use crate::state::{AppState, RunningInstance};
+use std::collections::HashMap;
 use tauri::{Emitter, State};
 
 #[tauri::command]
@@ -40,9 +42,18 @@ pub async fn launch_instance(
 /// `child.wait()` for the same launch.
 #[tauri::command]
 pub async fn stop_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
-    let pid = state.running_pids.lock().await.get(&instance_id).copied();
+    let pid = state.running_instances.lock().await.get(&instance_id).map(|r| r.pid);
     let pid = pid.ok_or_else(|| "This instance isn't running".to_string())?;
     kill_process(pid).map_err(|e| e.to_string())
+}
+
+/// Lets the UI show a "running" badge (and which account) for every
+/// instance, not just the currently-selected one.
+#[tauri::command]
+pub async fn list_running_instances(
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, RunningInstance>, String> {
+    Ok(state.running_instances.lock().await.clone())
 }
 
 #[cfg(unix)]
@@ -102,6 +113,13 @@ async fn do_launch(
     let inst = instance::get_instance(&state.instances_dir(), instance_id)?
         .ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
 
+    // Two accounts (or the same one twice) launching the same instance at
+    // once would have both JVMs writing to the same world saves and config
+    // at the same time - a real corruption risk, not just a UI quirk.
+    if let Some(running) = state.running_instances.lock().await.get(instance_id) {
+        anyhow::bail!("This instance is already running as {}", running.account_username);
+    }
+
     let profile = resolve_launch_profile(state, &inst).await?;
 
     let manifest = download::fetch_version_manifest(state).await?;
@@ -125,6 +143,8 @@ async fn do_launch(
             anyhow::bail!("{:?} isn't supported yet", inst.loader);
         }
     };
+
+    let java_path = java::ensure_java(app, state, instance_id, &detail).await?;
 
     download::download_client_jar(app, state, instance_id, &detail).await?;
     let (mut classpath, native_jars) =
@@ -173,9 +193,18 @@ async fn do_launch(
         .split_whitespace()
         .map(str::to_string)
         .collect();
-    let exit_code =
-        mc_launch::spawn_and_stream(app, state, instance_id, inst.memory_mb, &extra_jvm_args, args, &game_dir)
-            .await?;
+    let exit_code = mc_launch::spawn_and_stream(
+        app,
+        state,
+        instance_id,
+        &profile,
+        &java_path,
+        inst.memory_mb,
+        &extra_jvm_args,
+        args,
+        &game_dir,
+    )
+    .await?;
 
     let _ = app.emit(
         "launch-progress",

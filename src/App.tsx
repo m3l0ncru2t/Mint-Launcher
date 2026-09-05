@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 import { api } from "./api";
 import { Sidebar } from "./components/Sidebar";
@@ -12,29 +11,45 @@ import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { UpdateBanner } from "./components/UpdateBanner";
-import type { GameProfile, Instance, InstanceLogEvent, LaunchProgressEvent, Settings } from "./types";
+import { BACKGROUND_THEMES } from "./themes";
+import type {
+  GameProfile,
+  Instance,
+  InstanceLogEvent,
+  InstanceRunningEvent,
+  LaunchProgressEvent,
+  RunningInstance,
+  Settings,
+} from "./types";
 
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [profile, setProfile] = useState<GameProfile | null>(null);
-  const [settings, setSettings] = useState<Settings>({ offlineUsername: null, microsoftClientId: null });
+  const [settings, setSettings] = useState<Settings>({
+    offlineUsername: null,
+    microsoftClientId: null,
+    backgroundTheme: null,
+    themeOpacity: {},
+    customBackgroundNames: {},
+  });
   const [showCreate, setShowCreate] = useState(false);
   const [showImportExternal, setShowImportExternal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [instanceSettingsFor, setInstanceSettingsFor] = useState<Instance | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
   const [progressByInstance, setProgressByInstance] = useState<Record<string, LaunchProgressEvent>>({});
   const [logsByInstance, setLogsByInstance] = useState<Record<string, string[]>>({});
+  const [runningByInstance, setRunningByInstance] = useState<Record<string, RunningInstance>>({});
 
   useEffect(() => {
-    Promise.all([api.listInstances(), api.getActiveProfile(), api.getSettings()])
-      .then(([inst, prof, settings]) => {
+    Promise.all([api.listInstances(), api.getActiveProfile(), api.getSettings(), api.listRunningInstances()])
+      .then(([inst, prof, settings, running]) => {
         setInstances(inst);
         setProfile(prof);
         setSettings(settings);
+        setRunningByInstance(running);
         if (inst.length > 0) setSelectedId(inst[0].id);
       })
       .finally(() => setLoaded(true));
@@ -50,11 +65,63 @@ export default function App() {
         return { ...prev, [event.payload.instanceId]: [...existing, event.payload.line] };
       });
     });
+    // Fired whenever a launch actually starts/stops a game process - kept
+    // separate from `progressByInstance` (which also covers the download
+    // stages before the game process exists) so the sidebar can show a
+    // running badge for every instance, not just the selected one.
+    const unlistenRunning = listen<InstanceRunningEvent>("instance-running-changed", (event) => {
+      setRunningByInstance((prev) => {
+        const next = { ...prev };
+        const { instanceId, running, pid, accountUuid, accountUsername } = event.payload;
+        if (running && pid !== undefined && accountUuid && accountUsername) {
+          next[instanceId] = { pid, accountUuid, accountUsername };
+        } else {
+          delete next[instanceId];
+        }
+        return next;
+      });
+    });
     return () => {
       unlistenProgress.then((f) => f());
       unlistenLog.then((f) => f());
+      unlistenRunning.then((f) => f());
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const theme = settings.backgroundTheme;
+
+    async function apply() {
+      const preset = BACKGROUND_THEMES.find((t) => t.id === theme);
+      if (preset) {
+        document.body.style.backgroundImage = preset.css;
+        return;
+      }
+      if (theme) {
+        // Not a known preset id - must be a previously-added custom
+        // background, referenced by its own id.
+        const url = await api.getCustomBackground(theme).catch(() => null);
+        if (!cancelled) document.body.style.backgroundImage = url ? `url("${url}")` : "none";
+        return;
+      }
+      document.body.style.backgroundImage = "none";
+    }
+
+    apply();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.backgroundTheme]);
+
+  useEffect(() => {
+    const key = settings.backgroundTheme ?? "default";
+    const preset = BACKGROUND_THEMES.find((t) => t.id === key);
+    const fallback = preset?.defaultOpacity ?? { sidebar: 0.82, modsPanel: 0.82 };
+    const entry = settings.themeOpacity[key];
+    document.documentElement.style.setProperty("--sidebar-alpha", String(entry?.sidebar ?? fallback.sidebar));
+    document.documentElement.style.setProperty("--mods-panel-alpha", String(entry?.modsPanel ?? fallback.modsPanel));
+  }, [settings.backgroundTheme, settings.themeOpacity]);
 
   function dismissProgress(instanceId: string) {
     setProgressByInstance((prev) => {
@@ -71,19 +138,12 @@ export default function App() {
     });
   }
 
-  async function handleImportInstance() {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "Mint Launcher Backup", extensions: ["zip"] }],
+  function handleReorder(orderedIds: string[]) {
+    setInstances((prev) => {
+      const byId = new Map(prev.map((i) => [i.id, i]));
+      return orderedIds.map((id) => byId.get(id)).filter((i): i is Instance => !!i);
     });
-    if (!path) return;
-    setImportError(null);
-    try {
-      const inst = await api.importInstance(path);
-      refreshInstances(inst.id);
-    } catch (e) {
-      setImportError(String(e));
-    }
+    api.reorderInstances(orderedIds).catch(() => refreshInstances());
   }
 
   async function performDelete(id: string) {
@@ -115,12 +175,12 @@ export default function App() {
       <UpdateBanner />
       <Sidebar
         instances={instances}
+        runningByInstance={runningByInstance}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onNewInstance={() => setShowCreate(true)}
-        onImportInstance={handleImportInstance}
-        onImportFromLauncher={() => setShowImportExternal(true)}
-        importError={importError}
+        onImportInstance={() => setShowImportExternal(true)}
+        onReorder={handleReorder}
         onOpenInstanceSettings={setInstanceSettingsFor}
         profile={profile}
         onProfileChange={setProfile}
@@ -155,7 +215,14 @@ export default function App() {
         />
       )}
 
-      {showSettings && <SettingsDialog profile={profile} onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsDialog
+          profile={profile}
+          settings={settings}
+          onSettingsChange={setSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
 
       {showImportExternal && (
         <ImportExternalDialog

@@ -102,39 +102,41 @@ export function BrowseResourcePacksDialog({ instanceId, onClose, onInstalled }: 
           {loading && <div className="placeholder">Searching…</div>}
           {!loading && results.length === 0 && <div className="placeholder">No resource packs found.</div>}
           {!loading &&
-            results.map((r) => (
-              <div key={r.projectId} className="mod-search-row" onClick={() => setInfoResult(r)}>
-                {r.iconUrl ? (
-                  <img src={r.iconUrl} className="mod-search-icon" alt="" />
-                ) : (
-                  <div className="mod-search-icon placeholder-icon" />
-                )}
-                <div className="mod-search-info">
-                  <div className="mod-search-title">{r.title}</div>
-                  <div className="mod-search-desc">{r.description}</div>
-                  <div className="mod-search-meta">
-                    by {r.author} · {formatDownloads(r.downloads)} downloads
-                  </div>
-                  {installedMsg[r.projectId] && (
-                    <div className="mod-search-installed">{installedMsg[r.projectId]}</div>
+            results.map((r) => {
+              const sessionMsg = installedMsg[r.projectId];
+              const outdated = r.installed && r.upToDate === false && !sessionMsg;
+              const statusText = sessionMsg ?? (r.installed ? (outdated ? "Installed · update available" : "✓ Installed and up to date") : null);
+              const alreadyInstalled = !!sessionMsg || r.installed;
+              return (
+                <div key={r.projectId} className="mod-search-row" onClick={() => setInfoResult(r)}>
+                  {r.iconUrl ? (
+                    <img src={r.iconUrl} className="mod-search-icon" alt="" />
+                  ) : (
+                    <div className="mod-search-icon placeholder-icon" />
                   )}
+                  <div className="mod-search-info">
+                    <div className="mod-search-title">{r.title}</div>
+                    <div className="mod-search-desc">{r.description}</div>
+                    <div className="mod-search-meta">
+                      by {r.author} · {formatDownloads(r.downloads)} downloads
+                    </div>
+                    {statusText && (
+                      <div className={`mod-search-installed${outdated ? " outdated" : ""}`}>{statusText}</div>
+                    )}
+                  </div>
+                  <button
+                    className="primary-btn small"
+                    disabled={installing === r.projectId || alreadyInstalled}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleInstall(r.projectId);
+                    }}
+                  >
+                    {alreadyInstalled ? "Installed" : installing === r.projectId ? "Installing…" : "Install"}
+                  </button>
                 </div>
-                <button
-                  className="primary-btn small"
-                  disabled={installing === r.projectId || !!installedMsg[r.projectId]}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleInstall(r.projectId);
-                  }}
-                >
-                  {installedMsg[r.projectId]
-                    ? "Installed"
-                    : installing === r.projectId
-                      ? "Installing…"
-                      : "Install"}
-                </button>
-              </div>
-            ))}
+              );
+            })}
           {!loading && loadingMore && <div className="placeholder">Loading more…</div>}
         </div>
       </div>

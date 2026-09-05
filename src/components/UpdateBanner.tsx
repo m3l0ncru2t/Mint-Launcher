@@ -1,20 +1,38 @@
 import { useEffect, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { api } from "../api";
+import type { PortableUpdateInfo } from "../types";
 
 type Status = "idle" | "downloading" | "installing" | "error";
 
 export function UpdateBanner() {
+  const [portable, setPortable] = useState(false);
   const [update, setUpdate] = useState<Update | null>(null);
+  const [portableUpdate, setPortableUpdate] = useState<PortableUpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    check()
-      .then((found) => {
-        if (found) setUpdate(found);
+    // The installed-app updater (Tauri's plugin-updater) downloads and runs
+    // the NSIS/MSI installer, which assumes an installed app at a fixed
+    // location. A portable build has no installer to run, so it checks
+    // GitHub releases directly instead - see check_portable_update in
+    // src-tauri/src/commands/updater.rs.
+    api
+      .isPortable()
+      .then((isPortable) => {
+        setPortable(isPortable);
+        if (isPortable) {
+          return api.checkPortableUpdate().then((found) => {
+            if (found) setPortableUpdate(found);
+          });
+        }
+        return check().then((found) => {
+          if (found) setUpdate(found);
+        });
       })
       .catch(() => {
         // No update endpoint reachable, or nothing published yet - not
@@ -23,12 +41,20 @@ export function UpdateBanner() {
   }, []);
 
   async function handleUpdate() {
-    if (!update) return;
     setError(null);
     setStatus("downloading");
-    let total = 0;
-    let downloaded = 0;
     try {
+      if (portable) {
+        if (!portableUpdate) return;
+        await api.installPortableUpdate(portableUpdate.downloadUrl);
+        // The backend swaps the exe and relaunches the app itself once this
+        // process exits, so there's nothing left to do on success here.
+        return;
+      }
+
+      if (!update) return;
+      let total = 0;
+      let downloaded = 0;
       await update.downloadAndInstall((event) => {
         if (event.event === "Started") {
           total = event.data.contentLength ?? 0;
@@ -46,12 +72,13 @@ export function UpdateBanner() {
     }
   }
 
-  if (!update || dismissed) return null;
+  const version = portable ? portableUpdate?.version : update?.version;
+  if (!version || dismissed) return null;
 
   return (
     <div className="update-banner">
       <div className="update-banner-text">
-        <strong>Update available</strong> — v{update.version} is ready to install.
+        <strong>Update available</strong> — v{version} is ready to install.
         {error && <div className="error-text">{error}</div>}
       </div>
       <div className="update-banner-actions">
@@ -65,7 +92,9 @@ export function UpdateBanner() {
             </button>
           </>
         )}
-        {status === "downloading" && <span className="hint-inline">Downloading… {progress}%</span>}
+        {status === "downloading" && (
+          <span className="hint-inline">{portable ? "Downloading…" : `Downloading… ${progress}%`}</span>
+        )}
         {status === "installing" && <span className="hint-inline">Installing…</span>}
         {status === "error" && (
           <button className="ghost-btn small" onClick={handleUpdate}>

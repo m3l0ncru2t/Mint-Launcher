@@ -151,26 +151,23 @@ pub fn build_command_args(ctx: &LaunchContext) -> Vec<String> {
     args
 }
 
-fn java_binary() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "javaw"
-    } else {
-        "java"
-    }
-}
-
 /// Spawns the Java process and streams stdout/stderr as `instance-log`
-/// events until it exits, returning the process exit code.
+/// events until it exits, returning the process exit code. `java_path`
+/// comes from `java::ensure_java` - either a bare command name (a system
+/// install resolved via PATH) or an absolute path into an auto-downloaded
+/// runtime.
 pub async fn spawn_and_stream(
     app: &tauri::AppHandle,
     state: &AppState,
     instance_id: &str,
+    profile: &GameProfile,
+    java_path: &Path,
     memory_mb: u32,
     extra_jvm_args: &[String],
     args: Vec<String>,
     cwd: &Path,
 ) -> anyhow::Result<i32> {
-    let mut cmd = Command::new(java_binary());
+    let mut cmd = Command::new(java_path);
     cmd.arg(format!("-Xmx{memory_mb}M"));
     cmd.args(extra_jvm_args);
     cmd.args(&args);
@@ -179,14 +176,42 @@ pub async fn spawn_and_stream(
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
-        anyhow::anyhow!(
-            "failed to start Java ({}): {e}. Is a JDK installed and on PATH?",
-            java_binary()
-        )
+        anyhow::anyhow!("failed to start Java ({}): {e}", java_path.display())
     })?;
 
     if let Some(pid) = child.id() {
-        state.running_pids.lock().await.insert(instance_id.to_string(), pid);
+        state.running_instances.lock().await.insert(
+            instance_id.to_string(),
+            crate::state::RunningInstance {
+                pid,
+                account_uuid: profile.uuid.clone(),
+                account_username: profile.username.clone(),
+            },
+        );
+        let _ = app.emit(
+            "instance-running-changed",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "running": true,
+                "pid": pid,
+                "accountUuid": profile.uuid,
+                "accountUsername": profile.username,
+            }),
+        );
+        // The "launching" stage (emitted just before this in `do_launch`)
+        // only covers the JVM's own startup time - without this, the
+        // instance detail panel's activity card would otherwise be stuck
+        // showing "Starting Minecraft" for as long as the game stays open.
+        let _ = app.emit(
+            "launch-progress",
+            super::download::DownloadProgress {
+                instance_id: instance_id.to_string(),
+                stage: "running".to_string(),
+                message: "Minecraft is running".to_string(),
+                current: 1,
+                total: 1,
+            },
+        );
     }
 
     let stdout = child.stdout.take().expect("piped stdout");
@@ -219,7 +244,11 @@ pub async fn spawn_and_stream(
     let status = child.wait().await?;
     let _ = out_task.await;
     let _ = err_task.await;
-    state.running_pids.lock().await.remove(instance_id);
+    state.running_instances.lock().await.remove(instance_id);
+    let _ = app.emit(
+        "instance-running-changed",
+        serde_json::json!({ "instanceId": instance_id, "running": false }),
+    );
 
     Ok(status.code().unwrap_or(-1))
 }
