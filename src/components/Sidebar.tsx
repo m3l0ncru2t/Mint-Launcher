@@ -1,12 +1,15 @@
 import { useState } from "react";
 import appIcon from "../assets/app-icon.png";
 import { AccountSwitcher } from "./AccountSwitcher";
+import { ACTIVE_STAGES } from "./InstanceDetail";
 import { InstanceIcon } from "./InstanceIcon";
-import type { GameProfile, Instance, RunningInstance } from "../types";
+import { PlayerAvatar } from "./PlayerAvatar";
+import type { GameProfile, Instance, LaunchProgressEvent, RunningInstance } from "../types";
 
 interface Props {
   instances: Instance[];
   runningByInstance: Record<string, RunningInstance>;
+  progressByInstance: Record<string, LaunchProgressEvent>;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onNewInstance: () => void;
@@ -22,6 +25,7 @@ interface Props {
 export function Sidebar({
   instances,
   runningByInstance,
+  progressByInstance,
   selectedId,
   onSelect,
   onNewInstance,
@@ -61,6 +65,8 @@ export function Sidebar({
         )}
         {instances.map((inst) => {
           const running = runningByInstance[inst.id];
+          const progress = progressByInstance[inst.id];
+          const isBusy = !running && progress ? ACTIVE_STAGES.has(progress.stage) : false;
           return (
             <div
               key={inst.id}
@@ -104,8 +110,18 @@ export function Sidebar({
                 <div className="instance-row-name">{inst.name}</div>
                 {running ? (
                   <div className="instance-row-running">
-                    <span className="running-dot" />
+                    <PlayerAvatar
+                      uuid={running.accountUuid}
+                      username={running.accountUsername}
+                      className="instance-row-avatar"
+                      size={14}
+                    />
                     Running as {running.accountUsername}
+                  </div>
+                ) : isBusy ? (
+                  <div className="instance-row-loading">
+                    {inst.versionId}
+                    <span className="spinner-small" />
                   </div>
                 ) : (
                   <div className="instance-row-meta">{inst.versionId}</div>

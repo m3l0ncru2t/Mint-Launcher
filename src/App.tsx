@@ -176,6 +176,7 @@ export default function App() {
       <Sidebar
         instances={instances}
         runningByInstance={runningByInstance}
+        progressByInstance={progressByInstance}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onNewInstance={() => setShowCreate(true)}

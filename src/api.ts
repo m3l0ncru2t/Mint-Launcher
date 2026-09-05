@@ -106,6 +106,12 @@ export const api = {
     accountId: string | null,
   ) => invoke<Instance>("update_instance_settings", { id, name, memoryMb, javaArgs, accountId }),
 
+  upgradeInstanceLoader: (id: string, loader: ModLoader, loaderVersion: string) =>
+    invoke<Instance>("upgrade_instance_loader", { id, loader, loaderVersion }),
+
+  updateInstanceVersion: (id: string, versionId: string) =>
+    invoke<Instance>("update_instance_version", { id, versionId }),
+
   setInstanceIcon: (id: string, dataBase64: string) =>
     invoke<Instance>("set_instance_icon", { id, dataBase64 }),
 

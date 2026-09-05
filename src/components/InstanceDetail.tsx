@@ -6,7 +6,10 @@ import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
 import type { Instance, LaunchProgressEvent } from "../types";
 
-const ACTIVE_STAGES = new Set(["java", "client", "libraries", "assets", "launching"]);
+// Exported so Sidebar can show a loading state for every instance, not just
+// the selected one - kept as a single source of truth for "what stage means
+// this instance is currently busy" so the two views can't drift apart.
+export const ACTIVE_STAGES = new Set(["java", "client", "libraries", "assets", "launching"]);
 
 /// A crash's actual cause is usually buried hundreds of lines up the
 /// console, well past what "exited with code N" tells you - matching a

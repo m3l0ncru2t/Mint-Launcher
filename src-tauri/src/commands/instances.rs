@@ -170,6 +170,64 @@ pub fn update_instance_settings(
     Ok(inst)
 }
 
+/// One-way: only a Vanilla instance can be upgraded, and only to a loader
+/// that's actually launchable (see `do_launch`) - Forge/Quilt are modeled
+/// but not wired up yet. No files change hands here; the loader jar/
+/// libraries are resolved and downloaded lazily on the instance's next
+/// launch, same as a Fabric instance created from scratch.
+#[tauri::command]
+pub fn upgrade_instance_loader(
+    state: State<AppState>,
+    id: String,
+    loader: ModLoader,
+    loader_version: String,
+) -> Result<Instance, String> {
+    if loader != ModLoader::Fabric {
+        return Err(format!("{loader:?} isn't supported yet"));
+    }
+    let mut inst = resolve_instance(&state, &id)?;
+    if inst.loader != ModLoader::Vanilla {
+        return Err("This instance already uses a mod loader".to_string());
+    }
+    inst.loader = loader;
+    inst.loader_version = Some(loader_version);
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+/// Moves an instance to a newer Minecraft version without recreating it -
+/// mods, worlds, and config are untouched. Libraries and (for Fabric) the
+/// loader profile are simply re-resolved against the new version on the
+/// instance's next launch, the same lazy resolution a freshly created
+/// instance goes through. Restricted to strictly newer versions (by release
+/// date) so this can't be used to quietly downgrade an instance, which
+/// `do_launch` never expects and isn't tested against.
+#[tauri::command]
+pub async fn update_instance_version(
+    state: State<'_, AppState>,
+    id: String,
+    version_id: String,
+) -> Result<Instance, String> {
+    let manifest = crate::minecraft::download::fetch_version_manifest(&state)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target = manifest
+        .versions
+        .iter()
+        .find(|v| v.id == version_id)
+        .ok_or_else(|| "Unknown Minecraft version".to_string())?;
+
+    let mut inst = resolve_instance(&state, &id)?;
+    if let Some(current) = manifest.versions.iter().find(|v| v.id == inst.version_id) {
+        if target.release_time <= current.release_time {
+            return Err("Pick a version newer than the instance's current one".to_string());
+        }
+    }
+    inst.version_id = version_id;
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
 #[tauri::command]
 pub fn set_instance_icon(state: State<AppState>, id: String, data_base64: String) -> Result<Instance, String> {
     let data = STANDARD.decode(data_base64.as_bytes()).map_err(|e| e.to_string())?;

@@ -247,23 +247,29 @@ button {
   white-space: nowrap;
 }
 
-.running-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--mint-400);
-  flex-shrink: 0;
-  animation: running-dot-pulse 1.6s ease-in-out infinite;
+.instance-row-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@keyframes running-dot-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
+.instance-row-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--mint-400);
+  flex-shrink: 0;
 }
 
 .empty-hint {

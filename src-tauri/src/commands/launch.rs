@@ -149,6 +149,7 @@ async fn do_launch(
     download::download_client_jar(app, state, instance_id, &detail).await?;
     let (mut classpath, native_jars) =
         download::download_libraries(app, state, instance_id, &detail.libraries).await?;
+
     let client_jar = state
         .versions_dir()
         .join(&detail.id)
