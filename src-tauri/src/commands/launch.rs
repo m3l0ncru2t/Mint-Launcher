@@ -39,12 +39,27 @@ pub async fn launch_instance(
 /// Force-kills an instance's running game process, identified only by its
 /// pid (recorded by `spawn_and_stream`) - not by holding onto the `Child`
 /// handle itself, since that's already tied up in the long-running
-/// `child.wait()` for the same launch.
+/// `child.wait()` for the same launch. Clears `running_instances` (and
+/// persists/emits that) itself instead of waiting for `spawn_and_stream`'s
+/// own `child.wait()` to notice the exit: an entry restored by
+/// `reconcile_running_instances` after a relaunch has no such task running
+/// in *this* process to ever notice, so without this a stopped-but-restored
+/// instance would keep showing as running until the next full restart.
+/// Harmless if `spawn_and_stream` also does its own (redundant) removal
+/// moments later for a normal, non-restored stop.
 #[tauri::command]
-pub async fn stop_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+pub async fn stop_instance(app: tauri::AppHandle, state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
     let pid = state.running_instances.lock().await.get(&instance_id).map(|r| r.pid);
     let pid = pid.ok_or_else(|| "This instance isn't running".to_string())?;
-    kill_process(pid).map_err(|e| e.to_string())
+    kill_process(pid).map_err(|e| e.to_string())?;
+
+    state.running_instances.lock().await.remove(&instance_id);
+    state.persist_running_instances().await;
+    let _ = app.emit(
+        "instance-running-changed",
+        serde_json::json!({ "instanceId": instance_id, "running": false }),
+    );
+    Ok(())
 }
 
 /// Lets the UI show a "running" badge (and which account) for every

@@ -188,6 +188,7 @@ pub async fn spawn_and_stream(
                 account_username: profile.username.clone(),
             },
         );
+        state.persist_running_instances().await;
         let _ = app.emit(
             "instance-running-changed",
             serde_json::json!({
@@ -245,6 +246,7 @@ pub async fn spawn_and_stream(
     let _ = out_task.await;
     let _ = err_task.await;
     state.running_instances.lock().await.remove(instance_id);
+    state.persist_running_instances().await;
     let _ = app.emit(
         "instance-running-changed",
         serde_json::json!({ "instanceId": instance_id, "running": false }),

@@ -1,14 +1,15 @@
 use crate::auth::GameProfile;
 use crate::settings::{self, Settings};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 
 /// Which account launched a currently-running instance, and its process id
 /// (see `AppState::running_instances`) - lets the UI show who's playing each
 /// instance, and lets `stop_instance` find the right pid to kill.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningInstance {
     pub pid: u32,
@@ -38,6 +39,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(data_dir: PathBuf) -> Self {
         let settings = settings::load(&data_dir.join("settings.json"));
+        let running_instances = reconcile_running_instances(&data_dir);
         Self {
             data_dir,
             http: reqwest::Client::builder()
@@ -46,8 +48,23 @@ impl AppState {
                 .expect("failed to build http client"),
             settings: Mutex::new(settings),
             active_profile: Mutex::new(None),
-            running_instances: Mutex::new(HashMap::new()),
+            running_instances: Mutex::new(running_instances),
         }
+    }
+
+    fn running_instances_path(&self) -> PathBuf {
+        self.data_dir.join("running_instances.json")
+    }
+
+    /// Best-effort snapshot of `running_instances` to disk - called after
+    /// every insert/remove (see `minecraft::launch::spawn_and_stream` and
+    /// `commands::launch::stop_instance`) so a relaunch (the in-app updater
+    /// installing itself, most notably) doesn't leave the UI thinking a game
+    /// that's still running in the background isn't - see
+    /// `reconcile_running_instances`, which reads this back on startup.
+    pub async fn persist_running_instances(&self) {
+        let map = self.running_instances.lock().await.clone();
+        let _ = save_running_instances(&self.running_instances_path(), &map);
     }
 
     pub fn settings_path(&self) -> PathBuf {
@@ -76,4 +93,50 @@ impl AppState {
     pub fn java_dir(&self) -> PathBuf {
         self.data_dir.join("java")
     }
+}
+
+fn save_running_instances(path: &Path, map: &HashMap<String, RunningInstance>) -> std::io::Result<()> {
+    fs::write(path, serde_json::to_string_pretty(map)?)
+}
+
+/// Restores whichever instances were running the last time this data dir's
+/// `running_instances.json` was written, keeping only the ones whose pid
+/// still actually belongs to a live process - anything that already exited
+/// (a normal game close while the launcher itself was mid-relaunch, not just
+/// the "game survives an update-triggered relaunch" case this exists for) is
+/// silently dropped instead of showing up as a phantom "running" instance
+/// forever. The file is rewritten immediately with just the survivors, so a
+/// stale entry doesn't linger around to be re-checked on every future
+/// startup either.
+fn reconcile_running_instances(data_dir: &Path) -> HashMap<String, RunningInstance> {
+    let path = data_dir.join("running_instances.json");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    let Ok(map) = serde_json::from_str::<HashMap<String, RunningInstance>>(&data) else {
+        return HashMap::new();
+    };
+    let alive: HashMap<String, RunningInstance> = map.into_iter().filter(|(_, r)| pid_is_alive(r.pid)).collect();
+    let _ = save_running_instances(&path, &alive);
+    alive
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    // Signal 0 does nothing to the target process - it only checks whether
+    // sending a real signal to it *would* succeed, i.e. whether it exists.
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn pid_is_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/NH", "/FI", &format!("PID eq {pid}")])
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
 }

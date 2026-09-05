@@ -508,16 +508,22 @@ fn scan_modrinth(base_dir: &Path) -> Vec<ImportCandidate> {
     out
 }
 
-/// Walks `CONTENT_DIRS`/`CONTENT_FILES` under a `.minecraft`-equivalent
-/// folder and returns `(file_count, total_bytes)` - shared by `scan` (to
-/// show an estimated size before importing) and `import_external` (to size
-/// its progress bar), so there's one tree-walk implementation instead of two
-/// that could drift apart on what counts as "content".
+/// Walks every non-excluded top-level folder (see `EXCLUDED_DIRS`) plus
+/// `CONTENT_FILES` under a `.minecraft`-equivalent folder and returns
+/// `(file_count, total_bytes)` - shared by `scan` (to show an estimated size
+/// before importing) and `import_external` (to size its progress bar), so
+/// there's one tree-walk implementation instead of two that could drift
+/// apart on what counts as "content".
 fn content_stats(minecraft_dir: &Path) -> (u64, u64) {
     let mut count = 0u64;
     let mut bytes = 0u64;
-    for dir_name in CONTENT_DIRS {
-        walk_stats(&minecraft_dir.join(dir_name), &mut count, &mut bytes);
+    if let Ok(entries) = fs::read_dir(minecraft_dir) {
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else { continue };
+            if file_type.is_dir() && !is_excluded_dir(&entry.file_name().to_string_lossy()) {
+                walk_stats(&entry.path(), &mut count, &mut bytes);
+            }
+        }
     }
     for file_name in CONTENT_FILES {
         if let Ok(meta) = fs::metadata(minecraft_dir.join(file_name)) {
@@ -570,29 +576,32 @@ fn copy_dir_recursive(
     Ok(())
 }
 
-/// The folders/files that make up "everything a player would consider part
-/// of their instance" - deliberately excludes `versions/`, `libraries/`, and
-/// `assets/`, which Mint manages itself and re-downloads per version/account
-/// as needed. Includes the data folders of common minimap/render mods
-/// (Xaero's, JourneyMap, VoxelMap, Voxy) alongside the vanilla folders,
-/// since those live at the game-dir root right next to `saves/` and are
-/// easy to otherwise miss.
-const CONTENT_DIRS: &[&str] = &[
-    "saves",
-    "resourcepacks",
-    "shaderpacks",
-    "config",
-    "mods",
-    "screenshots",
-    "schematics",
-    "XaeroWaypoints",
-    "XaeroWorldMap",
-    "journeymap",
-    "voxelmap",
-    "voxy",
-    "bobby",
-    "Distant_Horizons_server_data",
-];
+/// Every top-level folder under a `.minecraft`-equivalent directory gets
+/// copied *except* these - rather than maintaining a hand-picked allowlist
+/// of known mods' data folders (which will always be one release behind
+/// whatever new minimap/schematic/whatever mod shows up next), copying
+/// everything except what Mint clearly shouldn't duplicate catches any mod's
+/// data automatically, forever, with no further changes needed here.
+/// `versions/`/`libraries/`/`assets/` are what Mint itself manages and
+/// re-downloads per version/account - for the official launcher (whose
+/// `minecraft_dir` is the whole shared `.minecraft`, not a per-instance
+/// folder) these can also be many GB shared across every installed version,
+/// so copying them into each imported instance would be both redundant and
+/// enormous. `natives/` is a native-library extraction Mint (and Minecraft
+/// itself) regenerates fresh on every launch.
+const EXCLUDED_DIRS: &[&str] = &["versions", "libraries", "assets", "natives"];
+
+fn is_excluded_dir(name: &str) -> bool {
+    EXCLUDED_DIRS.iter().any(|excluded| excluded.eq_ignore_ascii_case(name))
+}
+
+/// Deliberately a curated allowlist rather than "every loose file at the
+/// root" like `EXCLUDED_DIRS` takes for folders: the official launcher's
+/// `.minecraft` root also holds `launcher_accounts.json` and
+/// `launcher_profiles.json`, which cache Microsoft account tokens - sweeping
+/// those into a new instance's folder would be a real credential-exposure
+/// risk (and Mint has its own, separate account storage anyway), not just
+/// clutter.
 const CONTENT_FILES: &[&str] = &["options.txt", "optionsof.txt", "servers.dat"];
 
 /// Creates a brand-new Mint instance from an `ImportCandidate` and copies
@@ -627,11 +636,16 @@ pub fn import_external(
     let mut copied: u64 = 0;
     on_progress(0, total_files, "Starting import…");
 
-    for dir_name in CONTENT_DIRS {
-        let src = content_dir.join(dir_name);
-        if src.is_dir() {
-            copy_dir_recursive(&src, &game_dir.join(dir_name), &mut copied, total_files, &mut on_progress)?;
+    for entry in fs::read_dir(&content_dir)?.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if !file_type.is_dir() {
+            continue;
         }
+        let dir_name = entry.file_name();
+        if is_excluded_dir(&dir_name.to_string_lossy()) {
+            continue;
+        }
+        copy_dir_recursive(&entry.path(), &game_dir.join(&dir_name), &mut copied, total_files, &mut on_progress)?;
     }
     for file_name in CONTENT_FILES {
         let src = content_dir.join(file_name);
