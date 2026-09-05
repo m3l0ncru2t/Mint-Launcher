@@ -19,10 +19,15 @@ export function LoginScreen({ settings, onLoggedIn }: Props) {
 
   const [savedAccounts, setSavedAccounts] = useState<AccountSummary[]>([]);
   const [signingInId, setSigningInId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [savedAccountError, setSavedAccountError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadSavedAccounts() {
     api.listAccounts().then(setSavedAccounts).catch(() => {});
+  }
+
+  useEffect(() => {
+    loadSavedAccounts();
   }, []);
 
   async function handleOfflineLogin() {
@@ -48,6 +53,24 @@ export function LoginScreen({ settings, onLoggedIn }: Props) {
       setSavedAccountError(String(e));
     } finally {
       setSigningInId(null);
+    }
+  }
+
+  // Lets a broken/stuck saved account (e.g. one that keeps hitting a stale
+  // sign-in error - see AADSTS70000 reports) be cleared from right here,
+  // instead of needing to sign in successfully first to reach the account
+  // switcher's own remove button.
+  async function handleRemoveSaved(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setRemovingId(id);
+    setSavedAccountError(null);
+    try {
+      await api.removeAccount(id);
+      loadSavedAccounts();
+    } catch (e) {
+      setSavedAccountError(String(e));
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -103,16 +126,31 @@ export function LoginScreen({ settings, onLoggedIn }: Props) {
             {savedAccounts.length > 0 && !msLogin.waitingForBrowser && (
               <div className="saved-accounts">
                 {savedAccounts.map((a) => (
-                  <button
+                  <div
                     key={a.id}
-                    className="saved-account-row"
-                    onClick={() => handleSignInSaved(a.id)}
-                    disabled={signingInId !== null}
+                    className={`saved-account-row${signingInId !== null || removingId !== null ? " disabled" : ""}`}
+                    onClick={() => {
+                      if (signingInId !== null || removingId !== null) return;
+                      handleSignInSaved(a.id);
+                    }}
                   >
                     <PlayerAvatar uuid={a.id} username={a.username} />
                     <span className="saved-account-name">{a.username}</span>
                     {signingInId === a.id && <span className="hint-inline">Signing in…</span>}
-                  </button>
+                    {removingId === a.id ? (
+                      <span className="hint-inline">Removing…</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="Remove account"
+                        onClick={(e) => handleRemoveSaved(a.id, e)}
+                        disabled={signingInId !== null || removingId !== null}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

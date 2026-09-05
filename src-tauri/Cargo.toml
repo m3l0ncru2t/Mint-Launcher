@@ -1,6 +1,6 @@
 [package]
 name = "mint-launcher"
-version = "0.1.5"
+version = "0.1.6"
 description = "Mint Launcher - a custom Minecraft launcher"
 authors = ["you"]
 edition = "2021"

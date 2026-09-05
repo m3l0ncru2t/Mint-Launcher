@@ -94,6 +94,17 @@ pub async fn login(
 ) -> anyhow::Result<LoginResult> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
+    // The redirect URI below uses the hostname "localhost" rather than the
+    // literal "127.0.0.1" because Microsoft's identity platform only grants
+    // its any-port leniency to an app registration's exact "http://localhost"
+    // redirect URI - a literal loopback IP wouldn't match it. But that means
+    // whichever address family the OS/browser resolves "localhost" to has to
+    // have a listener waiting on it, and on some systems (IPv6 preferred in
+    // resolution order, an "::1 localhost" hosts entry, etc.) that's not the
+    // IPv4 socket above. Binding the IPv6 loopback on the same port too (best
+    // effort - older systems without IPv6 simply won't get this listener)
+    // covers both without changing the redirect URI at all.
+    let listener_v6 = tokio::net::TcpListener::bind(format!("[::1]:{port}")).await.ok();
     let redirect_uri = format!("http://localhost:{port}");
 
     let verifier = pkce_verifier();
@@ -111,7 +122,7 @@ pub async fn login(
 
     let _ = app.emit("microsoft-login-open", LoginUrlInfo { url: auth_url });
 
-    let code = wait_for_redirect(listener, &state).await?;
+    let code = wait_for_redirect(listener, listener_v6, &state).await?;
     let (ms_access_token, refresh_token) =
         exchange_code(client, client_id, &code, &verifier, &redirect_uri).await?;
     let profile = finish_login(client, &ms_access_token).await?;
@@ -169,14 +180,28 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// Accepts exactly one connection on the loopback listener (Microsoft's
-/// redirect after the user finishes signing in in their browser), pulls the
-/// `code`/`error`/`state` query parameters out of the raw HTTP request line,
-/// and replies with a small confirmation page. Closing the browser tab
-/// instead of finishing sign-in never sends that redirect at all, so this
-/// gives up after a while instead of hanging forever.
-async fn wait_for_redirect(listener: TcpListener, expected_state: &str) -> anyhow::Result<String> {
-    let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
+/// Accepts exactly one connection on whichever loopback listener gets
+/// Microsoft's redirect first (see `login` for why there can be two - an
+/// IPv4 and an IPv6 one on the same port), pulls the `code`/`error`/`state`
+/// query parameters out of the raw HTTP request line, and replies with a
+/// small confirmation page. Closing the browser tab instead of finishing
+/// sign-in never sends that redirect at all, so this gives up after a while
+/// instead of hanging forever.
+async fn wait_for_redirect(
+    listener: TcpListener,
+    listener_v6: Option<TcpListener>,
+    expected_state: &str,
+) -> anyhow::Result<String> {
+    let accept = async {
+        match &listener_v6 {
+            Some(v6) => tokio::select! {
+                r = listener.accept() => r,
+                r = v6.accept() => r,
+            },
+            None => listener.accept().await,
+        }
+    };
+    let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(300), accept)
         .await
         .map_err(|_| anyhow::anyhow!("Sign-in timed out - the browser window wasn't completed. Try again."))??;
     let mut buf = vec![0u8; 8192];
@@ -207,10 +232,7 @@ async fn wait_for_redirect(listener: TcpListener, expected_state: &str) -> anyho
     let _ = stream.shutdown().await;
 
     if let Some(err) = params.get("error") {
-        let desc = params
-            .get("error_description")
-            .map(|d| d.replace('+', " "))
-            .unwrap_or_default();
+        let desc = params.get("error_description").cloned().unwrap_or_default();
         anyhow::bail!("Microsoft sign-in failed: {err} {desc}");
     }
 
@@ -231,11 +253,57 @@ fn parse_query(query: &str) -> HashMap<String, String> {
         .filter(|pair| !pair.is_empty())
         .filter_map(|pair| {
             let mut it = pair.splitn(2, '=');
-            let key = it.next()?.to_string();
-            let value = it.next().unwrap_or("").to_string();
+            let key = percent_decode(it.next()?);
+            let value = percent_decode(it.next().unwrap_or(""));
             Some((key, value))
         })
         .collect()
+}
+
+/// Decodes a `application/x-www-form-urlencoded`-style query component -
+/// `+` as space, `%XX` hex escapes as their byte value - the same convention
+/// Microsoft's redirect (and `reqwest`'s own `Client::form`, used to build
+/// the token exchange request below) use. Skipping this was a real bug: an
+/// authorization `code` containing a `+`, `/`, or `=` arrives here still
+/// percent-escaped from the URL, and `exchange_code`'s `.form(&params)`
+/// percent-encodes it a *second* time on top of that, so Microsoft receives
+/// a code that no longer matches the one it issued and rejects it with
+/// `AADSTS70000: the provided value for the 'code' parameter is not valid` -
+/// deterministically, every time, whenever a freshly issued code happens to
+/// contain one of those characters (most don't, which is why this wasn't
+/// caught immediately).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let byte = std::str::from_utf8(&bytes[i + 1..i + 3])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+                match byte {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 async fn exchange_code(
