@@ -59,6 +59,16 @@ pub async fn apply_loader(
     game_version: &str,
     loader_version: &str,
 ) -> anyhow::Result<VersionDetail> {
+    // Some importers (see `importer::scan_curseforge_instance`) have been
+    // seen storing a compound "<loaderVersion>-<gameVersion>" string as the
+    // loader version. Fabric's meta API treats the two as separate path
+    // segments and 400s ("no loader version found for ...") if either one
+    // drags the other along, so this strips a stray trailing "-<game_version>"
+    // before building the request regardless of where the value came from -
+    // fixes launching an instance that was already imported with the bad
+    // value stored, not just newly-imported ones.
+    let loader_version = loader_version.strip_suffix(&format!("-{game_version}")).unwrap_or(loader_version);
+
     let url = format!("{FABRIC_META_BASE}/{game_version}/{loader_version}/profile/json");
     let resp = client.get(&url).send().await?;
     let resp = ensure_success(resp, "Fetching Fabric loader profile").await?;

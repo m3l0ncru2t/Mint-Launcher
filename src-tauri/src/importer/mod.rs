@@ -361,6 +361,18 @@ fn scan_multimc_instance(dir: &Path) -> Option<ImportCandidate> {
     })
 }
 
+/// CurseForge's `baseModLoader.name` is usually just `"<loader>-<loaderVersion>"`
+/// (e.g. `"fabric-0.19.3"`), but has been observed with the target Minecraft
+/// version also baked onto the end (e.g. `"fabric-0.19.3-26.2"`) - stripping
+/// a trailing `"-<base_version>"` if present keeps the stored loader version
+/// as just the loader's own version either way. This matters because
+/// Fabric's meta API treats the game version and loader version as separate
+/// URL path segments and 400s ("no loader version found for ...") if either
+/// one drags the other along.
+fn strip_base_version_suffix(version: &str, base_version: &str) -> String {
+    version.strip_suffix(&format!("-{base_version}")).unwrap_or(version).to_string()
+}
+
 fn scan_curseforge_instance(dir: &Path) -> Option<ImportCandidate> {
     let data = fs::read_to_string(dir.join("minecraftinstance.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&data).ok()?;
@@ -380,9 +392,15 @@ fn scan_curseforge_instance(dir: &Path) -> Option<ImportCandidate> {
 
     let loader_name = json.get("baseModLoader").and_then(|b| b.get("name")).and_then(|n| n.as_str());
     let (loader, loader_version) = match loader_name {
-        Some(s) if s.starts_with("forge") => (ModLoader::Forge, s.strip_prefix("forge-").map(String::from)),
-        Some(s) if s.starts_with("fabric") => (ModLoader::Fabric, s.strip_prefix("fabric-").map(String::from)),
-        Some(s) if s.starts_with("quilt") => (ModLoader::Quilt, s.strip_prefix("quilt-").map(String::from)),
+        Some(s) if s.starts_with("forge") => {
+            (ModLoader::Forge, s.strip_prefix("forge-").map(|v| strip_base_version_suffix(v, &base_version)))
+        }
+        Some(s) if s.starts_with("fabric") => {
+            (ModLoader::Fabric, s.strip_prefix("fabric-").map(|v| strip_base_version_suffix(v, &base_version)))
+        }
+        Some(s) if s.starts_with("quilt") => {
+            (ModLoader::Quilt, s.strip_prefix("quilt-").map(|v| strip_base_version_suffix(v, &base_version)))
+        }
         _ => (ModLoader::Vanilla, None),
     };
 
