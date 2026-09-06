@@ -275,6 +275,35 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose }:
           </div>
         )}
 
+        <div className="form-field">
+          <label>Experimental</label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={settings.experimentalServerInstances}
+              disabled={busy}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                setBusy(true);
+                setError(null);
+                try {
+                  await api.setExperimentalServerInstances(enabled);
+                  onSettingsChange({ ...settings, experimentalServerInstances: enabled });
+                } catch (err) {
+                  setError(String(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+            Server instances
+          </label>
+          <div className="hint">
+            Adds "+ New Server" and "Import Server" to the sidebar, for hosting a dedicated server from this
+            machine alongside your regular instances.
+          </div>
+        </div>
+
         <div className="modal-actions">
           <button className="primary-btn" onClick={onClose}>
             Close

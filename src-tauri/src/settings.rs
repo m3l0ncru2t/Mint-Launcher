@@ -47,6 +47,11 @@ pub struct Settings {
     /// background with no entry here shows as plain "Custom".
     #[serde(default)]
     pub custom_background_names: HashMap<String, String>,
+    /// Unlocks the "+ New Server"/"Import Server" entry points in the
+    /// sidebar - see `instance::InstanceKind::Server`. Off by default since
+    /// server support is still experimental.
+    #[serde(default)]
+    pub experimental_server_instances: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +63,7 @@ impl Default for Settings {
             background_theme: None,
             theme_opacity: HashMap::new(),
             custom_background_names: HashMap::new(),
+            experimental_server_instances: false,
         }
     }
 }

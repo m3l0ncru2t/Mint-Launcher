@@ -90,3 +90,30 @@ pub async fn apply_loader(
 
     Ok(base)
 }
+
+/// Fetches Fabric's dedicated-server profile for `game_version`+`loader_version`
+/// and layers it onto the vanilla `base` version detail, the server-side
+/// counterpart to `apply_loader`. Simpler than the client version: the
+/// server endpoint's `mainClass` is `net.fabricmc.loader.impl.launch.knot.KnotServer`
+/// and it carries no `jvm` arguments (a dedicated server's launch args are
+/// just `-jar <jar> nogui`, not the client's argument-template system), so
+/// only `main_class`/`id`/`libraries` are relevant here.
+pub async fn apply_server_loader(
+    client: &reqwest::Client,
+    mut base: VersionDetail,
+    game_version: &str,
+    loader_version: &str,
+) -> anyhow::Result<VersionDetail> {
+    let loader_version = loader_version.strip_suffix(&format!("-{game_version}")).unwrap_or(loader_version);
+
+    let url = format!("{FABRIC_META_BASE}/{game_version}/{loader_version}/server/json");
+    let resp = client.get(&url).send().await?;
+    let resp = ensure_success(resp, "Fetching Fabric server loader profile").await?;
+    let profile: LoaderProfile = resp.json().await?;
+
+    base.id = profile.id;
+    base.main_class = profile.main_class;
+    base.libraries.extend(profile.libraries);
+
+    Ok(base)
+}

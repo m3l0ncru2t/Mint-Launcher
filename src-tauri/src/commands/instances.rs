@@ -1,9 +1,10 @@
-use crate::instance::{self, Instance, ModLoader};
+use crate::instance::{self, Instance, InstanceKind, ModLoader};
 use crate::mod_meta;
+use crate::server_instance;
 use crate::state::AppState;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, State};
 
 const MAX_ICON_BYTES: usize = 5 * 1024 * 1024;
 
@@ -59,8 +60,106 @@ pub fn create_instance(
     if name.trim().is_empty() {
         return Err("Instance name can't be empty".to_string());
     }
-    instance::create_instance(&state.instances_dir(), name, version_id, loader, loader_version)
+    instance::create_instance(&state.instances_dir(), name, version_id, loader, loader_version, InstanceKind::Client)
         .map_err(|e| e.to_string())
+}
+
+/// A dedicated server instance - kept as its own command rather than an
+/// extra `kind` param on `create_instance` so the EULA gate stays explicit
+/// and localized to server creation, and so the client creation path (used
+/// by every existing instance) stays untouched. `eula_accepted` must already
+/// be `true` here - `CreateServerDialog` only calls this after the user has
+/// checked the EULA box, never the other way around.
+#[tauri::command]
+pub fn create_server_instance(
+    state: State<AppState>,
+    name: String,
+    version_id: String,
+    loader: ModLoader,
+    loader_version: Option<String>,
+    eula_accepted: bool,
+) -> Result<Instance, String> {
+    if name.trim().is_empty() {
+        return Err("Instance name can't be empty".to_string());
+    }
+    if !eula_accepted {
+        return Err("You must accept the Minecraft EULA to create a server".to_string());
+    }
+    let mut inst = instance::create_instance(
+        &state.instances_dir(),
+        name,
+        version_id,
+        loader,
+        loader_version,
+        InstanceKind::Server,
+    )
+    .map_err(|e| e.to_string())?;
+    inst.eula_accepted = true;
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProgress {
+    name: String,
+    current: u64,
+    total: u64,
+    message: String,
+}
+
+/// Imports an existing dedicated server folder (see
+/// `server_instance::import_server_folder`) - reuses the exact same
+/// "import-progress" event `import_external_instance` emits, throttled the
+/// same way, so `ImportServerDialog` can reuse the identical listening
+/// pattern `ImportExternalDialog` already has.
+#[tauri::command]
+pub async fn import_server_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_path: String,
+    name: String,
+    version_id: String,
+    loader: ModLoader,
+    loader_version: Option<String>,
+    eula_accepted: bool,
+) -> Result<Instance, String> {
+    if name.trim().is_empty() {
+        return Err("Instance name can't be empty".to_string());
+    }
+    let instances_dir = state.instances_dir();
+    let progress_name = name.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut last_emit = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        server_instance::import_server_folder(
+            &instances_dir,
+            std::path::Path::new(&source_path),
+            name,
+            version_id,
+            loader,
+            loader_version,
+            eula_accepted,
+            |current, total, message| {
+                let now = std::time::Instant::now();
+                let due = last_emit.is_none_or(|t| now.duration_since(t).as_millis() >= 80);
+                if due || current == total {
+                    last_emit = Some(now);
+                    let _ = app.emit(
+                        "import-progress",
+                        ImportProgress {
+                            name: progress_name.clone(),
+                            current,
+                            total,
+                            message: message.to_string(),
+                        },
+                    );
+                }
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

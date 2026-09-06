@@ -35,6 +35,22 @@ pub struct ServerEntry {
     pub address: String,
 }
 
+/// What an `Instance` actually is - almost everything about storage/loading
+/// (`dir()`, `game_dir()`, `mods_dir()`, icon, sort order, `list_instances`)
+/// is already generic over this, so a `Server` instance lives in the exact
+/// same `instances/` tree and sidebar list as a `Client` one. Only launching
+/// (see `commands::launch::do_launch`) and a handful of UI spots (no account
+/// concept, Start/Stop/Restart/Kill instead of Play/Stop) actually branch on
+/// this. `#[serde(default)]` makes every instance saved before this field
+/// existed load as `Client`, which is exactly what they all were.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InstanceKind {
+    #[default]
+    Client,
+    Server,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
@@ -81,6 +97,14 @@ pub struct Instance {
     /// any explicitly-ordered ones instead of jumping to the top.
     #[serde(default)]
     pub sort_order: i64,
+    #[serde(default)]
+    pub kind: InstanceKind,
+    /// Only meaningful for `InstanceKind::Server` - required `true` before a
+    /// server instance can ever launch (see `do_launch_server`), only ever
+    /// set from the explicit checkbox in `CreateServerDialog`/
+    /// `ImportServerDialog`, never inferred or defaulted to true.
+    #[serde(default)]
+    pub eula_accepted: bool,
 }
 
 impl Instance {
@@ -220,6 +244,7 @@ pub fn create_instance(
     version_id: String,
     loader: ModLoader,
     loader_version: Option<String>,
+    kind: InstanceKind,
 ) -> std::io::Result<Instance> {
     let instance = Instance {
         id: Uuid::new_v4().to_string(),
@@ -235,18 +260,23 @@ pub fn create_instance(
         account_id: None,
         has_icon: false,
         sort_order: chrono::Utc::now().timestamp_millis(),
+        kind,
+        eula_accepted: false,
     };
     instance.save(instances_root)?;
 
-    // Best-effort - a brand-new instance getting a seeded server list matters
-    // far less than instance creation itself succeeding.
-    let _ = crate::minecraft::servers_dat::write_servers(
-        &instance.game_dir(instances_root),
-        &[ServerEntry {
-            name: "MintyMC".to_string(),
-            address: "mintymc.xyz".to_string(),
-        }],
-    );
+    // A seeded server-list bookmark only makes sense for a client instance
+    // connecting *to* servers - a server instance has nothing to seed here.
+    // Best-effort either way - this matters far less than creation itself.
+    if kind == InstanceKind::Client {
+        let _ = crate::minecraft::servers_dat::write_servers(
+            &instance.game_dir(instances_root),
+            &[ServerEntry {
+                name: "MintyMC".to_string(),
+                address: "mintymc.xyz".to_string(),
+            }],
+        );
+    }
 
     Ok(instance)
 }

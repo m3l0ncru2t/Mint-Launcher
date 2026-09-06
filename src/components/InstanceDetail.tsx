@@ -70,7 +70,11 @@ export function InstanceDetail({
   const [stopError, setStopError] = useState<string | null>(null);
   const [showConsole, setShowConsole] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [command, setCommand] = useState("");
+  const [sendingCommand, setSendingCommand] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const isServer = instance.kind === "server";
 
   function loadServerCount() {
     api
@@ -118,6 +122,39 @@ export function InstanceDetail({
       await api.stopInstance(instance.id);
     } catch (e) {
       setStopError(String(e));
+    }
+  }
+
+  async function handleKill() {
+    setStopError(null);
+    try {
+      await api.killInstance(instance.id);
+    } catch (e) {
+      setStopError(String(e));
+    }
+  }
+
+  async function handleRestart() {
+    setStopError(null);
+    try {
+      await api.stopInstance(instance.id);
+    } catch (e) {
+      setStopError(String(e));
+      return;
+    }
+    handlePlay();
+  }
+
+  async function handleSendCommand() {
+    if (!command.trim()) return;
+    setSendingCommand(true);
+    try {
+      await api.sendInstanceCommand(instance.id, command.trim());
+      setCommand("");
+    } catch (e) {
+      setStopError(String(e));
+    } finally {
+      setSendingCommand(false);
     }
   }
 
@@ -170,10 +207,30 @@ export function InstanceDetail({
           <button className="ghost-btn" onClick={handleExport} disabled={exporting}>
             {exporting ? "Backing up…" : "Backup"}
           </button>
-          <button className="ghost-btn" onClick={() => setShowServers(true)}>
-            Servers{serverCount > 0 ? ` (${serverCount})` : ""}
-          </button>
-          {isRunning ? (
+          {!isServer && (
+            <button className="ghost-btn" onClick={() => setShowServers(true)}>
+              Servers{serverCount > 0 ? ` (${serverCount})` : ""}
+            </button>
+          )}
+          {isServer ? (
+            isRunning ? (
+              <>
+                <button className="ghost-btn" onClick={handleRestart}>
+                  Restart
+                </button>
+                <button className="stop-btn" onClick={handleStop}>
+                  Stop
+                </button>
+                <button className="danger-btn" onClick={handleKill}>
+                  Kill
+                </button>
+              </>
+            ) : (
+              <button className="play-btn" onClick={() => handlePlay()} disabled={isBusy}>
+                {isBusy ? "Working…" : "Start"}
+              </button>
+            )
+          ) : isRunning ? (
             <button className="stop-btn" onClick={handleStop}>
               Stop
             </button>
@@ -189,7 +246,7 @@ export function InstanceDetail({
         {exportError && <div className="error-text">{exportError}</div>}
         {stopError && <div className="error-text">{stopError}</div>}
 
-        {!canPlay && (
+        {!isServer && !canPlay && (
           <div className="progress-card">
             <div className="stage">Sign in required</div>
             Sign in with an account before launching this instance.
@@ -234,15 +291,35 @@ export function InstanceDetail({
         {showConsole && (
           <div className="log-console" ref={logRef}>
             {logLines.length === 0 ? (
-              <span className="placeholder">Game output will appear here once you hit Play.</span>
+              <span className="placeholder">
+                {isServer ? "Server output will appear here once you hit Start." : "Game output will appear here once you hit Play."}
+              </span>
             ) : (
               logLines.join("\n")
             )}
           </div>
         )}
+
+        {isServer && isRunning && (
+          <div className="server-command-bar">
+            <input
+              type="text"
+              placeholder="Type a server command…"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSendCommand();
+              }}
+              disabled={sendingCommand}
+            />
+            <button className="ghost-btn small" onClick={handleSendCommand} disabled={sendingCommand || !command.trim()}>
+              Send
+            </button>
+          </div>
+        )}
       </div>
 
-      {showServers && (
+      {!isServer && showServers && (
         <ServersDialog
           instance={instance}
           onClose={() => setShowServers(false)}

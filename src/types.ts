@@ -21,6 +21,8 @@ export interface ServerStatus {
   favicon: string | null;
 }
 
+export type InstanceKind = "client" | "server";
+
 export interface Instance {
   id: string;
   dirName: string;
@@ -35,6 +37,8 @@ export interface Instance {
   accountId: string | null;
   hasIcon: boolean;
   sortOrder: number;
+  kind: InstanceKind;
+  eulaAccepted: boolean;
 }
 
 export interface VersionManifestEntry {
@@ -88,6 +92,7 @@ export interface Settings {
   backgroundTheme: string | null;
   themeOpacity: Record<string, ThemeOpacity>;
   customBackgroundNames: Record<string, string>;
+  experimentalServerInstances: boolean;
 }
 
 export interface CustomBackgroundInfo {
@@ -103,7 +108,7 @@ export interface PortableUpdateInfo {
 
 export interface LaunchProgressEvent {
   instanceId: string;
-  stage: "java" | "client" | "libraries" | "assets" | "launching" | "running" | "exited" | "error";
+  stage: "java" | "client" | "server" | "libraries" | "assets" | "launching" | "running" | "exited" | "error";
   message: string;
   current: number;
   total: number;
@@ -116,8 +121,9 @@ export interface InstanceLogEvent {
 
 export interface RunningInstance {
   pid: number;
-  accountUuid: string;
-  accountUsername: string;
+  /** Absent for a running server instance - there's no account involved. */
+  accountUuid: string | null;
+  accountUsername: string | null;
 }
 
 export interface InstanceRunningEvent {

@@ -270,14 +270,16 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
           />
         </div>
 
-        <div className="form-field">
-          <label>Account</label>
-          <Select value={accountId} onChange={setAccountId} options={accountOptions} />
-          <div className="hint">
-            Always launch this instance as this account, regardless of whichever one is currently
-            signed in - handy for running different instances under different accounts.
+        {instance.kind !== "server" && (
+          <div className="form-field">
+            <label>Account</label>
+            <Select value={accountId} onChange={setAccountId} options={accountOptions} />
+            <div className="hint">
+              Always launch this instance as this account, regardless of whichever one is currently
+              signed in - handy for running different instances under different accounts.
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="form-field">
           <label>Minecraft version</label>

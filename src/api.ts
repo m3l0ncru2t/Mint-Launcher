@@ -34,6 +34,31 @@ export const api = {
   createInstance: (name: string, versionId: string, loader: ModLoader, loaderVersion: string | null) =>
     invoke<Instance>("create_instance", { name, versionId, loader, loaderVersion }),
 
+  createServerInstance: (
+    name: string,
+    versionId: string,
+    loader: ModLoader,
+    loaderVersion: string | null,
+    eulaAccepted: boolean,
+  ) => invoke<Instance>("create_server_instance", { name, versionId, loader, loaderVersion, eulaAccepted }),
+
+  importServerFolder: (
+    sourcePath: string,
+    name: string,
+    versionId: string,
+    loader: ModLoader,
+    loaderVersion: string | null,
+    eulaAccepted: boolean,
+  ) =>
+    invoke<Instance>("import_server_folder", {
+      sourcePath,
+      name,
+      versionId,
+      loader,
+      loaderVersion,
+      eulaAccepted,
+    }),
+
   deleteInstance: (id: string) => invoke<void>("delete_instance", { id }),
 
   getInstance: (id: string) => invoke<Instance | null>("get_instance", { id }),
@@ -140,6 +165,9 @@ export const api = {
   setMicrosoftClientId: (clientId: string | null) =>
     invoke<void>("set_microsoft_client_id", { clientId }),
 
+  setExperimentalServerInstances: (enabled: boolean) =>
+    invoke<void>("set_experimental_server_instances", { enabled }),
+
   setBackgroundTheme: (theme: string | null) => invoke<void>("set_background_theme", { theme }),
 
   setThemeOpacity: (themeId: string, sidebar: number, modsPanel: number) =>
@@ -187,6 +215,11 @@ export const api = {
     invoke<number>("launch_instance", { instanceId, serverAddress: serverAddress ?? null }),
 
   stopInstance: (instanceId: string) => invoke<void>("stop_instance", { instanceId }),
+
+  killInstance: (instanceId: string) => invoke<void>("kill_instance", { instanceId }),
+
+  sendInstanceCommand: (instanceId: string, command: string) =>
+    invoke<void>("send_instance_command", { instanceId, command }),
 
   listRunningInstances: () => invoke<Record<string, RunningInstance>>("list_running_instances"),
 

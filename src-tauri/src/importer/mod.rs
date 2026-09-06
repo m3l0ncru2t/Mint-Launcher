@@ -552,7 +552,7 @@ fn content_stats(minecraft_dir: &Path) -> (u64, u64) {
     (count, bytes)
 }
 
-fn walk_stats(dir: &Path, count: &mut u64, bytes: &mut u64) {
+pub(crate) fn walk_stats(dir: &Path, count: &mut u64, bytes: &mut u64) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -569,7 +569,7 @@ fn walk_stats(dir: &Path, count: &mut u64, bytes: &mut u64) {
     }
 }
 
-fn copy_dir_recursive(
+pub(crate) fn copy_dir_recursive(
     src: &Path,
     dst: &Path,
     copied: &mut u64,
@@ -607,9 +607,9 @@ fn copy_dir_recursive(
 /// so copying them into each imported instance would be both redundant and
 /// enormous. `natives/` is a native-library extraction Mint (and Minecraft
 /// itself) regenerates fresh on every launch.
-const EXCLUDED_DIRS: &[&str] = &["versions", "libraries", "assets", "natives"];
+pub(crate) const EXCLUDED_DIRS: &[&str] = &["versions", "libraries", "assets", "natives"];
 
-fn is_excluded_dir(name: &str) -> bool {
+pub(crate) fn is_excluded_dir(name: &str) -> bool {
     EXCLUDED_DIRS.iter().any(|excluded| excluded.eq_ignore_ascii_case(name))
 }
 
@@ -647,6 +647,7 @@ pub fn import_external(
         candidate.version_id.clone(),
         candidate.loader,
         candidate.loader_version.clone(),
+        instance::InstanceKind::Client,
     )?;
     let game_dir = inst.game_dir(instances_root);
 

@@ -4,17 +4,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Which account launched a currently-running instance, and its process id
 /// (see `AppState::running_instances`) - lets the UI show who's playing each
-/// instance, and lets `stop_instance` find the right pid to kill.
+/// instance, and lets `stop_instance` find the right pid to kill. The
+/// account fields are `None` for a running *server* instance - there's no
+/// account involved in launching one - in which case the UI just shows a
+/// plain "Running" instead of "Running as {username}".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningInstance {
     pub pid: u32,
-    pub account_uuid: String,
-    pub account_username: String,
+    #[serde(default)]
+    pub account_uuid: Option<String>,
+    #[serde(default)]
+    pub account_username: Option<String>,
 }
 
 pub struct AppState {
@@ -34,6 +40,15 @@ pub struct AppState {
     /// `do_launch`) - two accounts (or the same one twice) sharing one
     /// instance's game directory at once risks corrupting its world saves.
     pub running_instances: Mutex<HashMap<String, RunningInstance>>,
+    /// A running *server* instance's stdin, kept open so console commands
+    /// (including a graceful `stop`) can be written to it - see
+    /// `minecraft::server_launch`. Deliberately separate from
+    /// `running_instances`: a raw pipe handle can't be serialized/cloned, so
+    /// it can't live in a map that gets sent wholesale to the frontend, and
+    /// it can't survive a relaunch the way a bare pid can (see
+    /// `reconcile_running_instances`) - there's simply nothing to reconstruct
+    /// it from after this process restarts.
+    pub instance_stdins: Mutex<HashMap<String, Arc<Mutex<tokio::process::ChildStdin>>>>,
 }
 
 impl AppState {
@@ -49,6 +64,7 @@ impl AppState {
             settings: Mutex::new(settings),
             active_profile: Mutex::new(None),
             running_instances: Mutex::new(running_instances),
+            instance_stdins: Mutex::new(HashMap::new()),
         }
     }
 

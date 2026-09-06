@@ -7,6 +7,7 @@ mod instance;
 mod minecraft;
 mod mod_meta;
 mod msa;
+mod server_instance;
 mod settings;
 mod state;
 
@@ -54,6 +55,8 @@ pub fn run() {
             commands::instances::list_instances,
             commands::instances::reorder_instances,
             commands::instances::create_instance,
+            commands::instances::create_server_instance,
+            commands::instances::import_server_folder,
             commands::instances::delete_instance,
             commands::instances::get_instance,
             commands::instances::list_mods,
@@ -94,6 +97,7 @@ pub fn run() {
             commands::versions::get_fabric_loader_versions,
             commands::auth::get_settings,
             commands::auth::set_microsoft_client_id,
+            commands::auth::set_experimental_server_instances,
             commands::appearance::set_background_theme,
             commands::appearance::set_theme_opacity,
             commands::appearance::add_custom_background,
@@ -116,6 +120,8 @@ pub fn run() {
             commands::auth::get_player_skin_url,
             commands::launch::launch_instance,
             commands::launch::stop_instance,
+            commands::launch::kill_instance,
+            commands::launch::send_instance_command,
             commands::launch::list_running_instances,
             commands::updater::is_portable,
             commands::updater::check_portable_update,

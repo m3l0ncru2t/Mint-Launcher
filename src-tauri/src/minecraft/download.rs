@@ -123,6 +123,30 @@ pub async fn download_client_jar(
     Ok(dest)
 }
 
+/// Written to `{id}-server.jar` rather than `{id}.jar` so it can't collide
+/// with a client jar cached for the same version id (both are cached under
+/// the same `versions_dir()/{id}/` folder).
+pub async fn download_server_jar(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    instance_id: &str,
+    detail: &VersionDetail,
+) -> anyhow::Result<PathBuf> {
+    let server = detail
+        .downloads
+        .server
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("{} has no dedicated server download", detail.id))?;
+    emit_progress(app, instance_id, "server", "Downloading server jar", 0, 1);
+    let dest = state
+        .versions_dir()
+        .join(&detail.id)
+        .join(format!("{}-server.jar", detail.id));
+    download_verified(&state.http, &server.url, &dest, Some(&server.sha1)).await?;
+    emit_progress(app, instance_id, "server", "Server jar ready", 1, 1);
+    Ok(dest)
+}
+
 /// Returns (classpath entries, native jar paths to extract).
 pub async fn download_libraries(
     app: &tauri::AppHandle,

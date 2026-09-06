@@ -5,6 +5,8 @@ import { api } from "./api";
 import { Sidebar } from "./components/Sidebar";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { CreateInstanceDialog } from "./components/CreateInstanceDialog";
+import { CreateServerDialog } from "./components/CreateServerDialog";
+import { ImportServerDialog } from "./components/ImportServerDialog";
 import { InstanceDetail } from "./components/InstanceDetail";
 import { ImportExternalDialog } from "./components/ImportExternalDialog";
 import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
@@ -33,8 +35,11 @@ export default function App() {
     backgroundTheme: null,
     themeOpacity: {},
     customBackgroundNames: {},
+    experimentalServerInstances: false,
   });
   const [showCreate, setShowCreate] = useState(false);
+  const [showCreateServer, setShowCreateServer] = useState(false);
+  const [showImportServer, setShowImportServer] = useState(false);
   const [showImportExternal, setShowImportExternal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [instanceSettingsFor, setInstanceSettingsFor] = useState<Instance | null>(null);
@@ -181,6 +186,9 @@ export default function App() {
         onSelect={setSelectedId}
         onNewInstance={() => setShowCreate(true)}
         onImportInstance={() => setShowImportExternal(true)}
+        showServerEntryPoints={settings.experimentalServerInstances}
+        onNewServer={() => setShowCreateServer(true)}
+        onImportServer={() => setShowImportServer(true)}
         onReorder={handleReorder}
         onOpenInstanceSettings={setInstanceSettingsFor}
         profile={profile}
@@ -230,6 +238,26 @@ export default function App() {
           onClose={() => setShowImportExternal(false)}
           onImported={(id) => {
             setShowImportExternal(false);
+            refreshInstances(id);
+          }}
+        />
+      )}
+
+      {showCreateServer && (
+        <CreateServerDialog
+          onClose={() => setShowCreateServer(false)}
+          onCreated={(id) => {
+            setShowCreateServer(false);
+            refreshInstances(id);
+          }}
+        />
+      )}
+
+      {showImportServer && (
+        <ImportServerDialog
+          onClose={() => setShowImportServer(false)}
+          onImported={(id) => {
+            setShowImportServer(false);
             refreshInstances(id);
           }}
         />

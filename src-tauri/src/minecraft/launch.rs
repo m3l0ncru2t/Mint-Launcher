@@ -184,8 +184,8 @@ pub async fn spawn_and_stream(
             instance_id.to_string(),
             crate::state::RunningInstance {
                 pid,
-                account_uuid: profile.uuid.clone(),
-                account_username: profile.username.clone(),
+                account_uuid: Some(profile.uuid.clone()),
+                account_username: Some(profile.username.clone()),
             },
         );
         state.persist_running_instances().await;

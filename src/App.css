@@ -908,6 +908,29 @@ button {
   word-break: break-word;
 }
 
+.server-command-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.server-command-bar input {
+  flex: 1;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  padding: 9px 10px;
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.server-command-bar input:focus {
+  outline: none;
+  border-color: var(--mint-500);
+}
+
 .log-console .placeholder {
   color: var(--text-2);
 }

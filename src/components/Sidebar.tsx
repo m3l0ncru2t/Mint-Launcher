@@ -14,6 +14,9 @@ interface Props {
   onSelect: (id: string) => void;
   onNewInstance: () => void;
   onImportInstance: () => void;
+  showServerEntryPoints: boolean;
+  onNewServer: () => void;
+  onImportServer: () => void;
   onReorder: (orderedIds: string[]) => void;
   onOpenInstanceSettings: (instance: Instance) => void;
   profile: GameProfile | null;
@@ -30,6 +33,9 @@ export function Sidebar({
   onSelect,
   onNewInstance,
   onImportInstance,
+  showServerEntryPoints,
+  onNewServer,
+  onImportServer,
   onReorder,
   onOpenInstanceSettings,
   profile,
@@ -110,13 +116,19 @@ export function Sidebar({
                 <div className="instance-row-name">{inst.name}</div>
                 {running ? (
                   <div className="instance-row-running">
-                    <PlayerAvatar
-                      uuid={running.accountUuid}
-                      username={running.accountUsername}
-                      className="instance-row-avatar"
-                      size={14}
-                    />
-                    Running as {running.accountUsername}
+                    {running.accountUsername ? (
+                      <>
+                        <PlayerAvatar
+                          uuid={running.accountUuid ?? ""}
+                          username={running.accountUsername}
+                          className="instance-row-avatar"
+                          size={14}
+                        />
+                        Running as {running.accountUsername}
+                      </>
+                    ) : (
+                      "Running"
+                    )}
                   </div>
                 ) : isBusy ? (
                   <div className="instance-row-loading">
@@ -153,6 +165,20 @@ export function Sidebar({
         >
           Import Instance
         </button>
+        {showServerEntryPoints && (
+          <>
+            <button className="new-instance-btn" onClick={onNewServer}>
+              + New Server
+            </button>
+            <button
+              className="ghost-btn small"
+              title="Import an existing dedicated server folder"
+              onClick={onImportServer}
+            >
+              Import Server
+            </button>
+          </>
+        )}
       </div>
 
       <div className="account-widget">

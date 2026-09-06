@@ -56,6 +56,12 @@ pub struct JavaVersionSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionDownloads {
     pub client: DownloadArtifact,
+    /// Missing on very old versions - `Option` rather than required so those
+    /// still parse fine for client use, they just can't be launched as a
+    /// server (`download_server_jar` surfaces a clear error in that case
+    /// instead of failing to deserialize the whole version detail).
+    #[serde(default)]
+    pub server: Option<DownloadArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

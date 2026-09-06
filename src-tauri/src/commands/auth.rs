@@ -32,6 +32,13 @@ pub async fn set_microsoft_client_id(
     settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn set_experimental_server_instances(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.experimental_server_instances = enabled;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
 /// Returns the current session, silently re-authenticating the last-used
 /// saved account first if there isn't one yet - this is what makes signing
 /// in with Microsoft persist across app restarts.
