@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountSummary,
+  BannedPlayerEntry,
+  ConfigEntry,
   CustomBackgroundInfo,
   FabricLoaderInfo,
   GameProfile,
@@ -8,22 +10,29 @@ import type {
   Instance,
   InstalledModInfo,
   InstallSummary,
+  LogEntry,
   ModDetails,
   ModFile,
   ModLoader,
   ModProjectDetails,
   ModSearchPage,
   ModUpdateInfo,
+  OpEntry,
   PortableUpdateInfo,
+  ProcessStats,
   ProfileDetails,
+  RemoteServerLink,
   ResourcePackDetails,
   ResourcePackFile,
   RunningInstance,
+  ServerDetection,
   ServerEntry,
   ServerStatus,
   Settings,
   SuggestedPath,
+  TpsInfo,
   VersionManifestEntry,
+  WhitelistEntry,
 } from "./types";
 
 export const api = {
@@ -42,22 +51,10 @@ export const api = {
     eulaAccepted: boolean,
   ) => invoke<Instance>("create_server_instance", { name, versionId, loader, loaderVersion, eulaAccepted }),
 
-  importServerFolder: (
-    sourcePath: string,
-    name: string,
-    versionId: string,
-    loader: ModLoader,
-    loaderVersion: string | null,
-    eulaAccepted: boolean,
-  ) =>
-    invoke<Instance>("import_server_folder", {
-      sourcePath,
-      name,
-      versionId,
-      loader,
-      loaderVersion,
-      eulaAccepted,
-    }),
+  detectServerInstance: (sourcePath: string) => invoke<ServerDetection>("detect_server_instance", { sourcePath }),
+
+  importServerFolder: (sourcePath: string, name: string, eulaAccepted: boolean) =>
+    invoke<Instance>("import_server_folder", { sourcePath, name, eulaAccepted }),
 
   deleteInstance: (id: string) => invoke<void>("delete_instance", { id }),
 
@@ -71,6 +68,32 @@ export const api = {
     invoke<string>("toggle_mod", { id, fileName, enabled }),
 
   getModsDir: (id: string) => invoke<string>("get_mods_dir", { id }),
+
+  openFolder: (path: string) => invoke<void>("open_folder", { path }),
+
+  getServerProperties: (id: string) => invoke<Record<string, string>>("get_server_properties", { id }),
+
+  saveServerProperties: (id: string, values: Record<string, string>) =>
+    invoke<void>("save_server_properties", { id, values }),
+
+  getOps: (id: string) => invoke<OpEntry[]>("get_ops", { id }),
+
+  getWhitelist: (id: string) => invoke<WhitelistEntry[]>("get_whitelist", { id }),
+
+  getBannedPlayers: (id: string) => invoke<BannedPlayerEntry[]>("get_banned_players", { id }),
+
+  removeOpEntry: (id: string, name: string) => invoke<void>("remove_op_entry", { id, name }),
+
+  removeWhitelistEntry: (id: string, name: string) => invoke<void>("remove_whitelist_entry", { id, name }),
+
+  unbanPlayerEntry: (id: string, name: string) => invoke<void>("unban_player_entry", { id, name }),
+
+  addOpEntry: (id: string, username: string) => invoke<void>("add_op_entry", { id, username }),
+
+  addWhitelistEntry: (id: string, username: string) => invoke<void>("add_whitelist_entry", { id, username }),
+
+  addBanEntry: (id: string, username: string, reason: string) =>
+    invoke<void>("add_ban_entry", { id, username, reason }),
 
   checkModUpdates: (id: string) => invoke<ModUpdateInfo[]>("check_mod_updates", { id }),
 
@@ -92,6 +115,23 @@ export const api = {
     invoke<void>("delete_resourcepack", { id, fileName }),
 
   getResourcepacksDir: (id: string) => invoke<string>("get_resourcepacks_dir", { id }),
+
+  listConfigFiles: (id: string) => invoke<ConfigEntry[]>("list_config_files", { id }),
+
+  readConfigFile: (id: string, fileName: string) => invoke<string>("read_config_file", { id, fileName }),
+
+  writeConfigFile: (id: string, fileName: string, content: string) =>
+    invoke<void>("write_config_file", { id, fileName, content }),
+
+  deleteConfigFile: (id: string, fileName: string) => invoke<void>("delete_config_file", { id, fileName }),
+
+  getConfigDir: (id: string) => invoke<string>("get_config_dir", { id }),
+
+  listLogFiles: (id: string) => invoke<LogEntry[]>("list_log_files", { id }),
+
+  readLogFile: (id: string, fileName: string) => invoke<string>("read_log_file", { id, fileName }),
+
+  getLogsDir: (id: string) => invoke<string>("get_logs_dir", { id }),
 
   searchResourcepacks: (id: string, query: string, offset: number) =>
     invoke<ModSearchPage>("search_resourcepacks", { id, query, offset }),
@@ -123,6 +163,10 @@ export const api = {
 
   pingServer: (address: string) => invoke<ServerStatus>("ping_server", { address }),
 
+  listOnlinePlayers: (instanceId: string) => invoke<ServerStatus>("list_online_players", { instanceId }),
+
+  getServerTps: (instanceId: string) => invoke<TpsInfo | null>("get_server_tps", { instanceId }),
+
   updateInstanceSettings: (
     id: string,
     name: string,
@@ -143,6 +187,8 @@ export const api = {
   removeInstanceIcon: (id: string) => invoke<Instance>("remove_instance_icon", { id }),
 
   getInstanceIcon: (id: string) => invoke<string | null>("get_instance_icon", { id }),
+
+  getServerIcon: (id: string) => invoke<string | null>("get_server_icon", { id }),
 
   exportInstance: (id: string, destPath: string) => invoke<void>("export_instance", { id, destPath }),
 
@@ -167,6 +213,26 @@ export const api = {
 
   setExperimentalServerInstances: (enabled: boolean) =>
     invoke<void>("set_experimental_server_instances", { enabled }),
+
+  setExperimentalConfigsLogsTabs: (enabled: boolean) =>
+    invoke<void>("set_experimental_configs_logs_tabs", { enabled }),
+
+  setRemoteAdminEnabled: (enabled: boolean) => invoke<void>("set_remote_admin_enabled", { enabled }),
+
+  setRemoteAdminPort: (port: number) => invoke<void>("set_remote_admin_port", { port }),
+
+  setRemoteAdminInstance: (instanceId: string | null) =>
+    invoke<void>("set_remote_admin_instance", { instanceId }),
+
+  setSpaciousInstanceView: (enabled: boolean) => invoke<void>("set_spacious_instance_view", { enabled }),
+
+  remoteConnect: (host: string, port: number) => invoke<RemoteServerLink>("remote_connect", { host, port }),
+
+  remoteReconnect: (id: string) => invoke<RemoteServerLink>("remote_reconnect", { id }),
+
+  listRemoteServers: () => invoke<RemoteServerLink[]>("list_remote_servers"),
+
+  removeRemoteServer: (id: string) => invoke<void>("remove_remote_server", { id }),
 
   setBackgroundTheme: (theme: string | null) => invoke<void>("set_background_theme", { theme }),
 
@@ -222,6 +288,10 @@ export const api = {
     invoke<void>("send_instance_command", { instanceId, command }),
 
   listRunningInstances: () => invoke<Record<string, RunningInstance>>("list_running_instances"),
+
+  getProcessStats: (pid: number) => invoke<ProcessStats>("get_process_stats", { pid }),
+
+  detectRunningServer: (instanceId: string) => invoke<boolean>("detect_running_server", { instanceId }),
 
   isPortable: () => invoke<boolean>("is_portable"),
 

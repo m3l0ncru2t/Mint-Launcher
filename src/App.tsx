@@ -7,7 +7,9 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { CreateInstanceDialog } from "./components/CreateInstanceDialog";
 import { CreateServerDialog } from "./components/CreateServerDialog";
 import { ImportServerDialog } from "./components/ImportServerDialog";
+import { ImportRemoteServerDialog } from "./components/ImportRemoteServerDialog";
 import { InstanceDetail } from "./components/InstanceDetail";
+import { RemoteInstanceDetail } from "./components/RemoteInstanceDetail";
 import { ImportExternalDialog } from "./components/ImportExternalDialog";
 import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
 import { LoginScreen } from "./components/LoginScreen";
@@ -20,6 +22,7 @@ import type {
   InstanceLogEvent,
   InstanceRunningEvent,
   LaunchProgressEvent,
+  RemoteServerLink,
   RunningInstance,
   Settings,
 } from "./types";
@@ -36,10 +39,18 @@ export default function App() {
     themeOpacity: {},
     customBackgroundNames: {},
     experimentalServerInstances: false,
+    experimentalConfigsLogsTabs: false,
+    remoteAdminEnabled: false,
+    remoteAdminPort: 25580,
+    remoteAdminInstanceId: null,
+    spaciousInstanceView: false,
   });
+  const [remoteServers, setRemoteServers] = useState<RemoteServerLink[]>([]);
+  const [selectedRemoteId, setSelectedRemoteId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [showImportServer, setShowImportServer] = useState(false);
+  const [showImportRemoteServer, setShowImportRemoteServer] = useState(false);
   const [showImportExternal, setShowImportExternal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [instanceSettingsFor, setInstanceSettingsFor] = useState<Instance | null>(null);
@@ -49,12 +60,19 @@ export default function App() {
   const [runningByInstance, setRunningByInstance] = useState<Record<string, RunningInstance>>({});
 
   useEffect(() => {
-    Promise.all([api.listInstances(), api.getActiveProfile(), api.getSettings(), api.listRunningInstances()])
-      .then(([inst, prof, settings, running]) => {
+    Promise.all([
+      api.listInstances(),
+      api.getActiveProfile(),
+      api.getSettings(),
+      api.listRunningInstances(),
+      api.listRemoteServers(),
+    ])
+      .then(([inst, prof, settings, running, remote]) => {
         setInstances(inst);
         setProfile(prof);
         setSettings(settings);
         setRunningByInstance(running);
+        setRemoteServers(remote);
         if (inst.length > 0) setSelectedId(inst[0].id);
       })
       .finally(() => setLoaded(true));
@@ -78,8 +96,8 @@ export default function App() {
       setRunningByInstance((prev) => {
         const next = { ...prev };
         const { instanceId, running, pid, accountUuid, accountUsername } = event.payload;
-        if (running && pid !== undefined && accountUuid && accountUsername) {
-          next[instanceId] = { pid, accountUuid, accountUsername };
+        if (running && pid !== undefined) {
+          next[instanceId] = { pid, accountUuid: accountUuid ?? null, accountUsername: accountUsername ?? null };
         } else {
           delete next[instanceId];
         }
@@ -143,6 +161,33 @@ export default function App() {
     });
   }
 
+  // Local instances and remote-linked servers are two entirely separate
+  // lists (see RemoteServerLink) - selecting one clears the other so only
+  // one detail view ever shows at a time.
+  function selectLocal(id: string) {
+    setSelectedRemoteId(null);
+    setSelectedId(id);
+  }
+
+  function selectRemote(id: string) {
+    setSelectedId(null);
+    setSelectedRemoteId(id);
+  }
+
+  async function removeRemoteServer(id: string) {
+    await api.removeRemoteServer(id);
+    setRemoteServers((prev) => prev.filter((l) => l.id !== id));
+    if (selectedRemoteId === id) setSelectedRemoteId(null);
+  }
+
+  // remoteApi silently reruns the login handshake and gets a fresh token
+  // whenever the host rejects the saved one (e.g. its own app restarted,
+  // which invalidates every admin's session) - this just keeps that refresh
+  // in local state so it doesn't have to happen again next launch.
+  function updateRemoteServer(updated: RemoteServerLink) {
+    setRemoteServers((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+  }
+
   function handleReorder(orderedIds: string[]) {
     setInstances((prev) => {
       const byId = new Map(prev.map((i) => [i.id, i]));
@@ -174,6 +219,7 @@ export default function App() {
   }
 
   const selectedInstance = instances.find((i) => i.id === selectedId) ?? null;
+  const selectedRemote = remoteServers.find((l) => l.id === selectedRemoteId) ?? null;
 
   return (
     <div className="app-shell">
@@ -183,7 +229,7 @@ export default function App() {
         runningByInstance={runningByInstance}
         progressByInstance={progressByInstance}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={selectLocal}
         onNewInstance={() => setShowCreate(true)}
         onImportInstance={() => setShowImportExternal(true)}
         showServerEntryPoints={settings.experimentalServerInstances}
@@ -191,18 +237,32 @@ export default function App() {
         onImportServer={() => setShowImportServer(true)}
         onReorder={handleReorder}
         onOpenInstanceSettings={setInstanceSettingsFor}
+        remoteServers={remoteServers}
+        selectedRemoteId={selectedRemoteId}
+        onSelectRemote={selectRemote}
+        onImportRemoteServer={() => setShowImportRemoteServer(true)}
         profile={profile}
         onProfileChange={setProfile}
         onSignOut={() => api.signOut().then(() => setProfile(null))}
         onOpenSettings={() => setShowSettings(true)}
       />
 
-      {selectedInstance ? (
+      {selectedRemote ? (
+        <RemoteInstanceDetail
+          link={selectedRemote}
+          onRemove={removeRemoteServer}
+          onLinkUpdated={updateRemoteServer}
+          spaciousView={settings.spaciousInstanceView}
+        />
+      ) : selectedInstance ? (
         <InstanceDetail
           key={selectedInstance.id}
           instance={selectedInstance}
           progress={progressByInstance[selectedInstance.id] ?? null}
           logLines={logsByInstance[selectedInstance.id] ?? []}
+          pid={runningByInstance[selectedInstance.id]?.pid ?? null}
+          showConfigsLogsTabs={settings.experimentalConfigsLogsTabs}
+          spaciousView={settings.spaciousInstanceView}
           onDelete={setConfirmDeleteId}
           onChanged={() => refreshInstances(selectedInstance.id)}
           onDismissProgress={() => dismissProgress(selectedInstance.id)}
@@ -230,6 +290,7 @@ export default function App() {
           settings={settings}
           onSettingsChange={setSettings}
           onClose={() => setShowSettings(false)}
+          instances={instances}
         />
       )}
 
@@ -259,6 +320,19 @@ export default function App() {
           onImported={(id) => {
             setShowImportServer(false);
             refreshInstances(id);
+          }}
+        />
+      )}
+
+      {showImportRemoteServer && (
+        <ImportRemoteServerDialog
+          onClose={() => setShowImportRemoteServer(false)}
+          onImported={(id) => {
+            setShowImportRemoteServer(false);
+            api.listRemoteServers().then((list) => {
+              setRemoteServers(list);
+              selectRemote(id);
+            });
           }}
         />
       )}

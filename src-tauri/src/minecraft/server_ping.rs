@@ -21,6 +21,19 @@ pub struct ServerStatus {
     /// Already a full `data:image/png;base64,...` string per the protocol -
     /// usable directly as an `<img>` src with no further work.
     pub favicon: Option<String>,
+    /// A vanilla server includes up to 12 currently-online players here by
+    /// default (`players.sample` in the status JSON) - enough for the
+    /// Players tab to show who's on without needing RCON or scraping the
+    /// console for join/leave lines. Empty (not absent) when a server hides
+    /// this or has nobody online.
+    pub sample: Vec<PlayerSample>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerSample {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,8 +98,23 @@ async fn ping_inner(host: &str, port: u16) -> anyhow::Result<ServerStatus> {
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
     let favicon = value.get("favicon").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let sample = value
+        .get("players")
+        .and_then(|p| p.get("sample"))
+        .and_then(|v| v.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let id = entry.get("id")?.as_str()?.to_string();
+                    let name = entry.get("name")?.as_str()?.to_string();
+                    Some(PlayerSample { id, name })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
-    Ok(ServerStatus { motd, online, max, favicon })
+    Ok(ServerStatus { motd, online, max, favicon, sample })
 }
 
 #[derive(Debug, Clone, Default)]

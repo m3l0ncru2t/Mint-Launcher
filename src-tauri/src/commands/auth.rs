@@ -39,6 +39,46 @@ pub async fn set_experimental_server_instances(state: State<'_, AppState>, enabl
     settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn set_experimental_configs_logs_tabs(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.experimental_configs_logs_tabs = enabled;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
+/// Toggling this doesn't start/stop the server directly - `remote_api::
+/// run_supervisor` polls `Settings` every couple of seconds and (re)starts or
+/// stops its listener to match, the same "background task watches settings"
+/// shape `AppState::watch_for_dead_instances` already uses for a different
+/// concern.
+#[tauri::command]
+pub async fn set_remote_admin_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.remote_admin_enabled = enabled;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_remote_admin_port(state: State<'_, AppState>, port: u16) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.remote_admin_port = port;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_remote_admin_instance(state: State<'_, AppState>, instance_id: Option<String>) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.remote_admin_instance_id = instance_id;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_spacious_instance_view(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.spacious_instance_view = enabled;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
 /// Returns the current session, silently re-authenticating the last-used
 /// saved account first if there isn't one yet - this is what makes signing
 /// in with Microsoft persist across app restarts.

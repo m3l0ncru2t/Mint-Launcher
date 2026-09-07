@@ -10,6 +10,27 @@ interface Props {
   onIconChanged: (instance: Instance) => void;
 }
 
+const DIFFICULTIES = ["peaceful", "easy", "normal", "hard"];
+const GAMEMODES = ["survival", "creative", "adventure", "spectator"];
+
+// Mirrors what a freshly-generated server.properties already defaults to, so
+// a server that's never been launched yet (no file on disk) still shows
+// sensible values instead of a wall of empty fields.
+const SERVER_PROPERTY_DEFAULTS: Record<string, string> = {
+  motd: "A Minecraft Server",
+  "max-players": "20",
+  difficulty: "easy",
+  gamemode: "survival",
+  pvp: "true",
+  "online-mode": "true",
+  "white-list": "false",
+  "server-port": "25565",
+  "view-distance": "10",
+  "simulation-distance": "10",
+  "allow-flight": "false",
+  "spawn-protection": "16",
+};
+
 export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChanged }: Props) {
   const [name, setName] = useState(instance.name);
   const [memoryMb, setMemoryMb] = useState(instance.memoryMb);
@@ -34,6 +55,37 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [targetVersionId, setTargetVersionId] = useState("");
   const [updatingVersion, setUpdatingVersion] = useState(false);
+
+  const [serverProps, setServerProps] = useState<Record<string, string>>({});
+  const [loadingServerProps, setLoadingServerProps] = useState(false);
+  const [savingServerProps, setSavingServerProps] = useState(false);
+  const [serverPropsError, setServerPropsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (instance.kind !== "server") return;
+    setLoadingServerProps(true);
+    api
+      .getServerProperties(instance.id)
+      .then((loaded) => setServerProps({ ...SERVER_PROPERTY_DEFAULTS, ...loaded }))
+      .catch((e) => setServerPropsError(String(e)))
+      .finally(() => setLoadingServerProps(false));
+  }, [instance.id, instance.kind]);
+
+  function setProp(key: string, value: string) {
+    setServerProps((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSaveServerProps() {
+    setSavingServerProps(true);
+    setServerPropsError(null);
+    try {
+      await api.saveServerProperties(instance.id, serverProps);
+    } catch (e) {
+      setServerPropsError(String(e));
+    } finally {
+      setSavingServerProps(false);
+    }
+  }
 
   useEffect(() => {
     api.listAccounts().then(setAccounts).catch(() => {});
@@ -248,6 +300,17 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} maxLength={64} />
         </div>
 
+        {instance.externalDir && (
+          <div className="form-field">
+            <label>Linked folder</label>
+            <div className="hint">{instance.externalDir}</div>
+            <div className="hint">
+              This server runs directly from this folder - nothing was copied into Mint, so mods, worlds, and
+              settings changes here all land in the original files.
+            </div>
+          </div>
+        )}
+
         <div className="form-field">
           <label>Memory allocation (MB)</label>
           <input
@@ -269,6 +332,143 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
             onChange={(e) => setJavaArgs(e.target.value)}
           />
         </div>
+
+        {instance.kind === "server" && (
+          <div className="form-field">
+            <label>Server settings</label>
+            {loadingServerProps && <div className="hint">Loading server.properties…</div>}
+            {!loadingServerProps && (
+              <div className="server-properties-grid">
+                <label className="server-property">
+                  <span>Message of the day</span>
+                  <input
+                    type="text"
+                    value={serverProps.motd ?? ""}
+                    onChange={(e) => setProp("motd", e.target.value)}
+                  />
+                </label>
+                <label className="server-property">
+                  <span>Max players</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={serverProps["max-players"] ?? ""}
+                    onChange={(e) => setProp("max-players", e.target.value)}
+                  />
+                </label>
+                <label className="server-property">
+                  <span>Difficulty</span>
+                  <select
+                    value={serverProps.difficulty ?? "easy"}
+                    onChange={(e) => setProp("difficulty", e.target.value)}
+                  >
+                    {DIFFICULTIES.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="server-property">
+                  <span>Default game mode</span>
+                  <select
+                    value={serverProps.gamemode ?? "survival"}
+                    onChange={(e) => setProp("gamemode", e.target.value)}
+                  >
+                    {GAMEMODES.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="server-property">
+                  <span>Server port</span>
+                  <input
+                    type="number"
+                    value={serverProps["server-port"] ?? ""}
+                    onChange={(e) => setProp("server-port", e.target.value)}
+                  />
+                </label>
+                <label className="server-property">
+                  <span>Spawn protection radius</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={serverProps["spawn-protection"] ?? ""}
+                    onChange={(e) => setProp("spawn-protection", e.target.value)}
+                  />
+                </label>
+                <label className="server-property">
+                  <span>View distance</span>
+                  <input
+                    type="number"
+                    min={3}
+                    max={32}
+                    value={serverProps["view-distance"] ?? ""}
+                    onChange={(e) => setProp("view-distance", e.target.value)}
+                  />
+                </label>
+                <label className="server-property">
+                  <span>Simulation distance</span>
+                  <input
+                    type="number"
+                    min={3}
+                    max={32}
+                    value={serverProps["simulation-distance"] ?? ""}
+                    onChange={(e) => setProp("simulation-distance", e.target.value)}
+                  />
+                </label>
+                <label className="server-property-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={serverProps.pvp !== "false"}
+                    onChange={(e) => setProp("pvp", String(e.target.checked))}
+                  />
+                  Allow PvP
+                </label>
+                <label className="server-property-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={serverProps["allow-flight"] === "true"}
+                    onChange={(e) => setProp("allow-flight", String(e.target.checked))}
+                  />
+                  Allow flight
+                </label>
+                <label className="server-property-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={serverProps["white-list"] === "true"}
+                    onChange={(e) => setProp("white-list", String(e.target.checked))}
+                  />
+                  Require whitelist
+                </label>
+                <label className="server-property-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={serverProps["online-mode"] !== "false"}
+                    onChange={(e) => setProp("online-mode", String(e.target.checked))}
+                  />
+                  Verify Minecraft accounts
+                </label>
+              </div>
+            )}
+            <div className="hint">
+              Turning off "Verify Minecraft accounts" lets anyone connect with any username - only do this on a
+              private/offline network, never on a public server. Changes apply the next time this server is
+              (re)started.
+            </div>
+            {serverPropsError && <div className="error-text">{serverPropsError}</div>}
+            <button
+              type="button"
+              className="ghost-btn small"
+              onClick={handleSaveServerProps}
+              disabled={savingServerProps || loadingServerProps}
+            >
+              {savingServerProps ? "Saving…" : "Save server settings"}
+            </button>
+          </div>
+        )}
 
         {instance.kind !== "server" && (
           <div className="form-field">

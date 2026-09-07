@@ -4,7 +4,8 @@ use crate::server_instance;
 use crate::state::AppState;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
-use tauri::{Emitter, State};
+use std::io::Read;
+use tauri::State;
 
 const MAX_ICON_BYTES: usize = 5 * 1024 * 1024;
 
@@ -29,6 +30,26 @@ fn resolve_mods_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, St
 
 fn resolve_resourcepacks_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
     Ok(resolve_instance(state, id)?.resourcepacks_dir(&state.instances_dir()))
+}
+
+fn resolve_config_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
+    Ok(resolve_instance(state, id)?.game_dir(&state.instances_dir()).join("config"))
+}
+
+fn resolve_logs_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
+    Ok(resolve_instance(state, id)?.game_dir(&state.instances_dir()).join("logs"))
+}
+
+/// Joins `file_name` onto `dir` and rejects anything that would escape it
+/// (e.g. a `../` component) - the same guard `delete_mod`/`delete_resourcepack`
+/// already apply inline, pulled out here since configs/logs need it in more
+/// than one place each.
+pub(crate) fn safe_child(dir: &std::path::Path, file_name: &str) -> Result<std::path::PathBuf, String> {
+    let path = dir.join(file_name);
+    if path.parent() != Some(dir) {
+        return Err("Invalid file name".to_string());
+    }
+    Ok(path)
 }
 
 #[derive(Debug, Serialize)]
@@ -101,61 +122,43 @@ pub fn create_server_instance(
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ImportProgress {
-    name: String,
-    current: u64,
-    total: u64,
-    message: String,
+pub struct ServerDetection {
+    pub version_id: String,
+    pub loader: ModLoader,
+    pub loader_version: Option<String>,
 }
 
-/// Imports an existing dedicated server folder (see
-/// `server_instance::import_server_folder`) - reuses the exact same
-/// "import-progress" event `import_external_instance` emits, throttled the
-/// same way, so `ImportServerDialog` can reuse the identical listening
-/// pattern `ImportExternalDialog` already has.
+/// Live preview for `ImportServerDialog`: runs the same auto-detection
+/// `import_server_folder` itself relies on, so the dialog can show what was
+/// found (or why detection failed) before the user commits to importing.
+#[tauri::command]
+pub fn detect_server_instance(source_path: String) -> Result<ServerDetection, String> {
+    let detection =
+        server_instance::detect_server(std::path::Path::new(&source_path)).map_err(|e| e.to_string())?;
+    Ok(ServerDetection {
+        version_id: detection.version_id,
+        loader: detection.loader,
+        loader_version: detection.loader_version,
+    })
+}
+
+/// Imports an existing dedicated server folder in place (see
+/// `server_instance::import_server_folder`) - version/loader are
+/// auto-detected from the folder itself, and nothing is copied, so this
+/// finishes near-instantly with no progress to report.
 #[tauri::command]
 pub async fn import_server_folder(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     source_path: String,
     name: String,
-    version_id: String,
-    loader: ModLoader,
-    loader_version: Option<String>,
     eula_accepted: bool,
 ) -> Result<Instance, String> {
     if name.trim().is_empty() {
         return Err("Instance name can't be empty".to_string());
     }
     let instances_dir = state.instances_dir();
-    let progress_name = name.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut last_emit = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
-        server_instance::import_server_folder(
-            &instances_dir,
-            std::path::Path::new(&source_path),
-            name,
-            version_id,
-            loader,
-            loader_version,
-            eula_accepted,
-            |current, total, message| {
-                let now = std::time::Instant::now();
-                let due = last_emit.is_none_or(|t| now.duration_since(t).as_millis() >= 80);
-                if due || current == total {
-                    last_emit = Some(now);
-                    let _ = app.emit(
-                        "import-progress",
-                        ImportProgress {
-                            name: progress_name.clone(),
-                            current,
-                            total,
-                            message: message.to_string(),
-                        },
-                    );
-                }
-            },
-        )
+        server_instance::import_server_folder(&instances_dir, std::path::Path::new(&source_path), name, eula_accepted)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -327,6 +330,127 @@ pub async fn update_instance_version(
     Ok(inst)
 }
 
+/// The curated `server.properties` settings surfaced in the UI - see
+/// `minecraft::server_properties` for how these are read/written without
+/// disturbing the rest of the file.
+#[tauri::command]
+pub fn get_server_properties(state: State<AppState>, id: String) -> Result<std::collections::HashMap<String, String>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    if inst.kind != InstanceKind::Server {
+        return Err("This isn't a server instance".to_string());
+    }
+    Ok(crate::minecraft::server_properties::read_properties(&inst.game_dir(&state.instances_dir())))
+}
+
+#[tauri::command]
+pub fn save_server_properties(
+    state: State<AppState>,
+    id: String,
+    values: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let inst = resolve_instance(&state, &id)?;
+    if inst.kind != InstanceKind::Server {
+        return Err("This isn't a server instance".to_string());
+    }
+    crate::minecraft::server_properties::write_properties(&inst.game_dir(&state.instances_dir()), &values)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_ops(state: State<AppState>, id: String) -> Result<Vec<crate::minecraft::server_admin::OpEntry>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    Ok(crate::minecraft::server_admin::read_ops(&inst.game_dir(&state.instances_dir())))
+}
+
+#[tauri::command]
+pub fn get_whitelist(state: State<AppState>, id: String) -> Result<Vec<crate::minecraft::server_admin::WhitelistEntry>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    Ok(crate::minecraft::server_admin::read_whitelist(&inst.game_dir(&state.instances_dir())))
+}
+
+#[tauri::command]
+pub fn get_banned_players(
+    state: State<AppState>,
+    id: String,
+) -> Result<Vec<crate::minecraft::server_admin::BannedPlayerEntry>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    Ok(crate::minecraft::server_admin::read_banned_players(&inst.game_dir(&state.instances_dir())))
+}
+
+/// Guards the direct-file-edit admin commands below: while the server is
+/// actually running, its own in-memory copy of ops/whitelist/bans is
+/// authoritative and can silently overwrite a direct file edit the next time
+/// anything touches them, so those cases are expected to go through the
+/// equivalent console command (`op`/`whitelist add`/`ban`/...) instead -
+/// `PlayersPanel` already picks the right path based on whether the server
+/// is running.
+async fn ensure_not_running(state: &AppState, id: &str) -> Result<(), String> {
+    if state.running_instances.lock().await.contains_key(id) {
+        return Err("Use the console/online players list for this while the server is running".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_op_entry(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::server_admin::remove_op(&inst.game_dir(&state.instances_dir()), &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_whitelist_entry(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::server_admin::remove_whitelist(&inst.game_dir(&state.instances_dir()), &name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unban_player_entry(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::server_admin::unban_player(&inst.game_dir(&state.instances_dir()), &name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_op_entry(state: State<'_, AppState>, id: String, username: String) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    let (uuid, name) = crate::minecraft::server_admin::lookup_uuid(&state.http, &username)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::minecraft::server_admin::add_op(&inst.game_dir(&state.instances_dir()), uuid, name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_whitelist_entry(state: State<'_, AppState>, id: String, username: String) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    let (uuid, name) = crate::minecraft::server_admin::lookup_uuid(&state.http, &username)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::minecraft::server_admin::add_whitelist(&inst.game_dir(&state.instances_dir()), uuid, name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_ban_entry(
+    state: State<'_, AppState>,
+    id: String,
+    username: String,
+    reason: String,
+) -> Result<(), String> {
+    ensure_not_running(&state, &id).await?;
+    let inst = resolve_instance(&state, &id)?;
+    let (uuid, name) = crate::minecraft::server_admin::lookup_uuid(&state.http, &username)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::minecraft::server_admin::add_ban(&inst.game_dir(&state.instances_dir()), uuid, name, reason)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_instance_icon(state: State<AppState>, id: String, data_base64: String) -> Result<Instance, String> {
     let data = STANDARD.decode(data_base64.as_bytes()).map_err(|e| e.to_string())?;
@@ -357,6 +481,23 @@ pub fn remove_instance_icon(state: State<AppState>, id: String) -> Result<Instan
 pub fn get_instance_icon(state: State<AppState>, id: String) -> Result<Option<String>, String> {
     let inst = resolve_instance(&state, &id)?;
     let Ok(data) = std::fs::read(inst.icon_path(&state.instances_dir())) else {
+        return Ok(None);
+    };
+    let Some(mime) = instance::sniff_image_mime(&data) else {
+        return Ok(None);
+    };
+    Ok(Some(format!("data:{mime};base64,{}", STANDARD.encode(&data))))
+}
+
+/// A dedicated server's own `server-icon.png` (the same 64x64 favicon a
+/// vanilla client shows for it in the multiplayer list) - used as the
+/// instance's icon in the sidebar when the user hasn't set a custom one, so
+/// a server instance shows the icon it was actually configured with instead
+/// of a generic letter avatar.
+#[tauri::command]
+pub fn get_server_icon(state: State<AppState>, id: String) -> Result<Option<String>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let Ok(data) = std::fs::read(inst.game_dir(&state.instances_dir()).join("server-icon.png")) else {
         return Ok(None);
     };
     let Some(mime) = instance::sniff_image_mime(&data) else {
@@ -422,6 +563,31 @@ pub fn get_mods_dir(state: State<AppState>, id: String) -> Result<String, String
     let dir = resolve_mods_dir(&state, &id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Reveals `path` in the OS file manager. A hand-rolled command rather than
+/// `tauri-plugin-opener`'s `openPath` - that plugin gates every call through
+/// an ACL path-scope the frontend has no reliable way to pre-authorize for a
+/// folder the user only picks at runtime (an imported instance's linked
+/// folder can be anywhere on disk, not just under Mint's own app-data dir),
+/// so it kept rejecting perfectly valid folders. This command is one of
+/// Mint's own `#[tauri::command]`s, which - like every other filesystem
+/// command here - the frontend can already call freely without a separate
+/// permission grant.
+#[tauri::command]
+pub fn open_folder(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_dir() {
+        return Err("That folder doesn't exist".to_string());
+    }
+    #[cfg(target_os = "linux")]
+    let mut cmd = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = std::process::Command::new("explorer");
+
+    cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -660,4 +826,155 @@ pub async fn install_mod(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_LOG_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEntry {
+    pub file_name: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+/// Top-level entries only (mirrors `list_mods`/`list_resourcepacks`, not a
+/// recursive tree view) - most mod configs sit directly in `config/`, and a
+/// per-mod subfolder still shows up (with its total size), just not
+/// browsable into yet.
+#[tauri::command]
+pub fn list_config_files(state: State<AppState>, id: String) -> Result<Vec<ConfigEntry>, String> {
+    let dir = resolve_config_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let (size, is_dir) = if file_type.is_dir() {
+            (crate::minecraft::resourcepacks::dir_size(&entry.path()), true)
+        } else {
+            (entry.metadata().map_err(|e| e.to_string())?.len(), false)
+        };
+        entries.push(ConfigEntry { file_name, size, is_dir });
+    }
+    entries.sort_by(|a, b| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()));
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn read_config_file(state: State<AppState>, id: String, file_name: String) -> Result<String, String> {
+    let dir = resolve_config_dir(&state, &id)?;
+    let path = safe_child(&dir, &file_name)?;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_TEXT_FILE_BYTES {
+        return Err("This file is too large to edit here - open it in a text editor instead".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|_| "This file isn't plain text".to_string())
+}
+
+#[tauri::command]
+pub fn write_config_file(
+    state: State<AppState>,
+    id: String,
+    file_name: String,
+    content: String,
+) -> Result<(), String> {
+    let dir = resolve_config_dir(&state, &id)?;
+    let path = safe_child(&dir, &file_name)?;
+    std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_config_file(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let dir = resolve_config_dir(&state, &id)?;
+    let path = safe_child(&dir, &file_name)?;
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub fn get_config_dir(state: State<AppState>, id: String) -> Result<String, String> {
+    let dir = resolve_config_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    pub file_name: String,
+    pub size: u64,
+    pub modified_at: Option<String>,
+}
+
+#[tauri::command]
+pub fn list_log_files(state: State<AppState>, id: String) -> Result<Vec<LogEntry>, String> {
+    let dir = resolve_logs_dir(&state, &id)?;
+    let mut entries = Vec::new();
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if !entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            let lower = file_name.to_lowercase();
+            if !lower.ends_with(".log") && !lower.ends_with(".log.gz") {
+                continue;
+            }
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            let modified_at = meta.modified().ok().map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+            entries.push(LogEntry { file_name, size: meta.len(), modified_at });
+        }
+    }
+    entries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    Ok(entries)
+}
+
+fn tail_str(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut start = text.len() - max_bytes;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+/// Transparently decompresses a rotated `.log.gz` - Minecraft compresses
+/// every log but the current session's `latest.log` once it rotates out.
+#[tauri::command]
+pub fn read_log_file(state: State<AppState>, id: String, file_name: String) -> Result<String, String> {
+    let dir = resolve_logs_dir(&state, &id)?;
+    let path = safe_child(&dir, &file_name)?;
+    let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let bytes = if file_name.to_lowercase().ends_with(".gz") {
+        let mut decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(raw));
+        let mut out = Vec::new();
+        decoder.read_to_end(&mut out).map_err(|e| e.to_string())?;
+        out
+    } else {
+        raw
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    if text.len() > MAX_LOG_TEXT_BYTES {
+        let tail = tail_str(&text, MAX_LOG_TEXT_BYTES);
+        Ok(format!("(showing only the last {}MB of this log)\n…\n{tail}", MAX_LOG_TEXT_BYTES / (1024 * 1024)))
+    } else {
+        Ok(text.into_owned())
+    }
+}
+
+#[tauri::command]
+pub fn get_logs_dir(state: State<AppState>, id: String) -> Result<String, String> {
+    let dir = resolve_logs_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
 }

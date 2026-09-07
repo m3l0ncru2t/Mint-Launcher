@@ -9,6 +9,8 @@ pub mod nbt;
 pub mod profile;
 pub mod resourcepacks;
 pub mod rules;
+pub mod server_admin;
 pub mod server_launch;
 pub mod server_ping;
+pub mod server_properties;
 pub mod servers_dat;

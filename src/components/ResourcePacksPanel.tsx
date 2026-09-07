@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { BrowseResourcePacksDialog } from "./BrowseResourcePacksDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -130,7 +129,7 @@ export function ResourcePacksPanel({ instanceId }: Props) {
   async function handleOpenFolder() {
     try {
       const dir = await api.getResourcepacksDir(instanceId);
-      await openPath(dir);
+      await api.openFolder(dir);
     } catch (e) {
       setError(String(e));
     }

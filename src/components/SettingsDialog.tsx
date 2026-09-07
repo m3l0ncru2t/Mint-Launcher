@@ -2,16 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { SkinCapeDialog } from "./SkinCapeDialog";
 import { BACKGROUND_THEMES } from "../themes";
-import type { CustomBackgroundInfo, GameProfile, Settings } from "../types";
+import type { CustomBackgroundInfo, GameProfile, Instance, Settings } from "../types";
 
 interface Props {
   profile: GameProfile | null;
   settings: Settings;
   onSettingsChange: (settings: Settings) => void;
   onClose: () => void;
+  instances: Instance[];
 }
 
-export function SettingsDialog({ profile, settings, onSettingsChange, onClose }: Props) {
+export function SettingsDialog({ profile, settings, onSettingsChange, onClose, instances }: Props) {
   const [showSkinCape, setShowSkinCape] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -266,6 +267,35 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose }:
           <div className="hint">Saved per theme - higher lets it show through the mods/resource pack list more.</div>
         </div>
 
+        <div className="form-field">
+          <label>Instance view</label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={settings.spaciousInstanceView}
+              disabled={busy}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                setBusy(true);
+                setError(null);
+                try {
+                  await api.setSpaciousInstanceView(enabled);
+                  onSettingsChange({ ...settings, spaciousInstanceView: enabled });
+                } catch (err) {
+                  setError(String(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+            Spacious layout
+          </label>
+          <div className="hint">
+            Removes the padding around an instance's console/mods area for more room, instead of the framed/boxed
+            look. Applies to every instance, local and remote alike.
+          </div>
+        </div>
+
         {profile?.userType === "msa" && (
           <div className="form-field">
             <label>Account</label>
@@ -302,7 +332,124 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose }:
             Adds "+ New Server" and "Import Server" to the sidebar, for hosting a dedicated server from this
             machine alongside your regular instances.
           </div>
+
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 10 }}>
+            <input
+              type="checkbox"
+              checked={settings.experimentalConfigsLogsTabs}
+              disabled={busy}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                setBusy(true);
+                setError(null);
+                try {
+                  await api.setExperimentalConfigsLogsTabs(enabled);
+                  onSettingsChange({ ...settings, experimentalConfigsLogsTabs: enabled });
+                } catch (err) {
+                  setError(String(err));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+            Configs and Logs tabs
+          </label>
+          <div className="hint">
+            Adds "Configs" and "Logs" tabs to each instance, for browsing/editing mod config files and past game
+            logs directly.
+          </div>
         </div>
+
+        {settings.experimentalServerInstances && (
+          <div className="form-field">
+            <label>Remote Admin</label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={settings.remoteAdminEnabled}
+                disabled={busy || !settings.remoteAdminInstanceId}
+                onChange={async (e) => {
+                  const enabled = e.target.checked;
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    await api.setRemoteAdminEnabled(enabled);
+                    onSettingsChange({ ...settings, remoteAdminEnabled: enabled });
+                  } catch (err) {
+                    setError(String(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              />
+              Let other admins connect to this server remotely
+            </label>
+            <div className="hint">
+              Lets a trusted admin's own Mint Launcher connect over a private network (Tailscale, WireGuard - never
+              the public internet) to see the console, manage mods, and start/stop/restart. They're let in based on
+              being an operator on the server below - no separate password to manage.
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <label htmlFor="remote-admin-instance">Shared server</label>
+              <select
+                id="remote-admin-instance"
+                value={settings.remoteAdminInstanceId ?? ""}
+                disabled={busy}
+                onChange={async (e) => {
+                  const instanceId = e.target.value || null;
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    await api.setRemoteAdminInstance(instanceId);
+                    onSettingsChange({ ...settings, remoteAdminInstanceId: instanceId });
+                  } catch (err) {
+                    setError(String(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <option value="">Select a server…</option>
+                {instances
+                  .filter((i) => i.kind === "server")
+                  .map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <label htmlFor="remote-admin-port">Port</label>
+              <input
+                id="remote-admin-port"
+                type="number"
+                value={settings.remoteAdminPort}
+                disabled={busy}
+                onChange={async (e) => {
+                  const port = Number(e.target.value);
+                  if (!Number.isInteger(port) || port <= 0 || port > 65535) return;
+                  setBusy(true);
+                  setError(null);
+                  try {
+                    await api.setRemoteAdminPort(port);
+                    onSettingsChange({ ...settings, remoteAdminPort: port });
+                  } catch (err) {
+                    setError(String(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              />
+              <div className="hint">
+                Give admins this machine's Tailscale/VPN address and this port to connect with - never forward this
+                port on your router.
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="primary-btn" onClick={onClose}>

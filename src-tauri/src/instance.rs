@@ -105,6 +105,16 @@ pub struct Instance {
     /// `ImportServerDialog`, never inferred or defaulted to true.
     #[serde(default)]
     pub eula_accepted: bool,
+    /// When set, `game_dir()` is this path directly instead of the usual
+    /// `dir()/game` - used by an imported server kept in place (see
+    /// `server_instance::import_server_folder`) so Mint never duplicates a
+    /// possibly huge, already-working server folder (world saves, mods,
+    /// configs) into its own instances tree; it launches and manages mods
+    /// against the original folder instead. `dir()` itself is untouched, so
+    /// `delete_instance` (which only ever removes `dir()`) never touches the
+    /// original folder when this instance is removed from Mint.
+    #[serde(default)]
+    pub external_dir: Option<String>,
 }
 
 impl Instance {
@@ -117,7 +127,10 @@ impl Instance {
     }
 
     pub fn game_dir(&self, instances_root: &Path) -> PathBuf {
-        self.dir(instances_root).join("game")
+        match &self.external_dir {
+            Some(dir) => PathBuf::from(dir),
+            None => self.dir(instances_root).join("game"),
+        }
     }
 
     pub fn natives_dir(&self, instances_root: &Path) -> PathBuf {
@@ -262,6 +275,7 @@ pub fn create_instance(
         sort_order: chrono::Utc::now().timestamp_millis(),
         kind,
         eula_accepted: false,
+        external_dir: None,
     };
     instance.save(instances_root)?;
 
@@ -329,7 +343,7 @@ pub fn export_instance(instances_root: &Path, id: &str, dest_zip: &Path) -> anyh
         zip.write_all(&fs::read(&icon_path)?)?;
     }
 
-    add_dir_to_zip(&mut zip, &dir.join("game"), "game", options)?;
+    add_dir_to_zip(&mut zip, &inst.game_dir(instances_root), "game", options)?;
     zip.finish()?;
     Ok(())
 }

@@ -52,6 +52,36 @@ pub struct Settings {
     /// server support is still experimental.
     #[serde(default)]
     pub experimental_server_instances: bool,
+    /// Unlocks the Configs/Logs tabs in `InstanceFilesPanel`. Off by default
+    /// alongside the other experimental options, since editing a config file
+    /// or clearing a stale one wrong can break an instance in ways the rest
+    /// of the UI doesn't guard against.
+    #[serde(default)]
+    pub experimental_configs_logs_tabs: bool,
+    /// Whether `remote_api`'s admin API server is running at all - off by
+    /// default since it's a new network-facing surface (meant to be reached
+    /// only over a private tunnel like Tailscale, never port-forwarded to the
+    /// public internet).
+    #[serde(default)]
+    pub remote_admin_enabled: bool,
+    #[serde(default = "default_remote_admin_port")]
+    pub remote_admin_port: u16,
+    /// The one server instance currently shared over the remote admin API -
+    /// v1 only supports sharing a single instance at a time.
+    #[serde(default)]
+    pub remote_admin_instance_id: Option<String>,
+    /// Which layout `InstanceDetail`/`RemoteInstanceDetail` use for the area
+    /// below the header - `false` (default) is the padded/boxed look local
+    /// instances have always had; `true` removes that padding for a more
+    /// spacious layout (how a remote server's view originally looked, before
+    /// this became a deliberate choice rather than an oversight). Applies to
+    /// both local and remote instances alike, not just remote ones.
+    #[serde(default)]
+    pub spacious_instance_view: bool,
+}
+
+fn default_remote_admin_port() -> u16 {
+    25580
 }
 
 impl Default for Settings {
@@ -64,6 +94,11 @@ impl Default for Settings {
             theme_opacity: HashMap::new(),
             custom_background_names: HashMap::new(),
             experimental_server_instances: false,
+            experimental_configs_logs_tabs: false,
+            remote_admin_enabled: false,
+            remote_admin_port: default_remote_admin_port(),
+            remote_admin_instance_id: None,
+            spacious_instance_view: false,
         }
     }
 }

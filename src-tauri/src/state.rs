@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 /// Which account launched a currently-running instance, and its process id
@@ -21,6 +22,19 @@ pub struct RunningInstance {
     pub account_uuid: Option<String>,
     #[serde(default)]
     pub account_username: Option<String>,
+}
+
+/// One admin's proven identity for the remote admin API (see
+/// `remote_api.rs`) - created after a successful `joinServer`/`hasJoined`
+/// handshake confirms they own the account and it's currently an op on the
+/// shared instance. Opaque bearer tokens rather than anything JWT-like since
+/// there's nothing that needs to be self-describing here - the session is
+/// only ever looked up in `AppState.remote_sessions`, never parsed.
+#[derive(Debug, Clone)]
+pub struct RemoteSession {
+    pub uuid: String,
+    pub username: String,
+    pub expires_at: std::time::Instant,
 }
 
 pub struct AppState {
@@ -49,6 +63,33 @@ pub struct AppState {
     /// `reconcile_running_instances`) - there's simply nothing to reconstruct
     /// it from after this process restarts.
     pub instance_stdins: Mutex<HashMap<String, Arc<Mutex<tokio::process::ChildStdin>>>>,
+    /// Kept persistently (rather than a fresh `System` per call) since
+    /// `sysinfo` computes a process's CPU% from the delta between two
+    /// refreshes of the *same* `System` - a one-shot query would always read
+    /// 0%. `commands::launch::get_process_stats` refreshes just the one pid
+    /// being polled, not the whole system, on each call.
+    pub process_stats: Mutex<sysinfo::System>,
+    /// Username -> real Mojang UUID, resolved on demand by
+    /// `commands::launch::list_online_players` so a console-derived player
+    /// list (which only ever gives back names, never UUIDs) can still show
+    /// real avatars. Cached indefinitely per launcher run rather than
+    /// re-resolved on every few-second poll, since that would burn through
+    /// Mojang's lookup API's rate limit fast with even a handful of players
+    /// online.
+    pub uuid_cache: Mutex<HashMap<String, String>>,
+    /// The last (real time, in-game tick count) sample `commands::launch::
+    /// get_server_tps` took for each instance - TPS/MSPT are a rate, so
+    /// computing them needs two samples spaced apart in real time. Kept here
+    /// rather than returned to the frontend to average client-side, since
+    /// the actual elapsed wall-clock time between polls can drift a bit and
+    /// this way the math always uses the real measured interval.
+    pub tps_samples: Mutex<HashMap<String, (std::time::Instant, i64)>>,
+    /// Bearer token -> the admin it belongs to, for the remote admin API
+    /// (`remote_api.rs`). Deliberately in-memory only, like `active_profile`
+    /// - a restart of this app (or of the machine) just means every admin's
+    /// Mint has to redo the join/hasJoined handshake, which is quick and
+    /// keeps no long-lived secret on disk.
+    pub remote_sessions: Mutex<HashMap<String, RemoteSession>>,
 }
 
 impl AppState {
@@ -65,6 +106,10 @@ impl AppState {
             active_profile: Mutex::new(None),
             running_instances: Mutex::new(running_instances),
             instance_stdins: Mutex::new(HashMap::new()),
+            process_stats: Mutex::new(sysinfo::System::new()),
+            uuid_cache: Mutex::new(HashMap::new()),
+            tps_samples: Mutex::new(HashMap::new()),
+            remote_sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,6 +153,37 @@ impl AppState {
     /// every instance that needs that version, downloaded once.
     pub fn java_dir(&self) -> PathBuf {
         self.data_dir.join("java")
+    }
+
+    /// Runs forever, periodically clearing any tracked-as-running instance
+    /// whose pid has actually died. Nothing else would ever notice this for
+    /// an instance this same app process didn't itself just launch: a fresh
+    /// `spawn_and_stream`/`spawn_and_stream_server` call's own `child.wait()`
+    /// task is what normally notices an exit and cleans up, but that task
+    /// only exists in the process that made the call - an entry restored by
+    /// `reconcile_running_instances` at startup, or adopted later by
+    /// `commands::launch::detect_running_server`, has no such task. Without
+    /// this, the "Running" badge for one of those would stick around forever
+    /// once the real process dies, until the whole app restarts again or the
+    /// user manually hits Stop/Kill.
+    pub async fn watch_for_dead_instances(app: AppHandle) {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let state = app.state::<AppState>();
+            let dead: Vec<String> = {
+                let running = state.running_instances.lock().await;
+                running.iter().filter(|(_, r)| !pid_is_alive(r.pid)).map(|(id, _)| id.clone()).collect()
+            };
+            for instance_id in dead {
+                state.running_instances.lock().await.remove(&instance_id);
+                state.instance_stdins.lock().await.remove(&instance_id);
+                state.persist_running_instances().await;
+                let _ = app.emit(
+                    "instance-running-changed",
+                    serde_json::json!({ "instanceId": instance_id, "running": false }),
+                );
+            }
+        }
     }
 }
 

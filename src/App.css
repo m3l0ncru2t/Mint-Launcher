@@ -179,6 +179,26 @@ button {
   gap: 4px;
 }
 
+.sidebar-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 4px 2px;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-divider::before,
+.sidebar-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 .instance-row {
   display: flex;
   align-items: center;
@@ -607,6 +627,20 @@ button {
   color: var(--text-0);
 }
 
+.restart-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--mint-400);
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.restart-btn:hover {
+  border-color: var(--mint-500);
+  background: rgba(52, 211, 153, 0.08);
+}
+
 .danger-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -631,7 +665,25 @@ button {
   gap: 14px;
 }
 
+/* The "spacious" instance view style (Settings > Appearance) - same layout
+   as .instance-body, just without the surrounding padding, so the
+   progress-card/mods-panel extend to the window's edges instead of sitting
+   in a framed box. */
+.instance-body-spacious {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .ghost-btn.small {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.danger-btn.small {
   padding: 5px 10px;
   font-size: 12px;
 }
@@ -809,6 +861,37 @@ button {
   white-space: nowrap;
 }
 
+.player-row {
+  cursor: default;
+}
+
+.player-row-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background-size: cover;
+  background-color: var(--bg-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.player-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.players-section-header {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 .hint-inline {
   font-size: 11px;
   color: var(--text-2);
@@ -833,6 +916,82 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 6px;
+}
+
+.progress-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.progress-card-main {
+  min-width: 0;
+}
+
+.server-resource-stats {
+  display: flex;
+  gap: 18px;
+  flex-shrink: 0;
+}
+
+.server-resource-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.server-resource-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.server-resource-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--mint-400);
+  flex-shrink: 0;
+}
+
+.server-resource-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 84px;
+}
+
+.server-resource-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.server-resource-label {
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+}
+
+.server-resource-value {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.server-resource-bar-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.server-resource-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--mint-400), var(--mint-600));
+  transition: width 0.4s ease;
 }
 
 .crash-hint {
@@ -906,6 +1065,31 @@ button {
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.file-viewer-body {
+  height: 50vh;
+  max-height: 480px;
+}
+
+.config-editor-textarea {
+  width: 100%;
+  height: 50vh;
+  max-height: 480px;
+  background: #0b0e0f;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c8d3d1;
+  resize: vertical;
+}
+
+.config-editor-textarea:focus {
+  outline: none;
+  border-color: var(--mint-500);
 }
 
 .server-command-bar {
@@ -1153,6 +1337,7 @@ button {
 }
 
 .form-field input[type="text"],
+.form-field input[type="number"],
 .form-field select {
   width: 100%;
   background: var(--bg-2);
@@ -1167,6 +1352,29 @@ button {
 .form-field select:focus {
   outline: none;
   border-color: var(--mint-500);
+}
+
+.server-properties-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin-bottom: 8px;
+}
+
+.server-property {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.server-property-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-0);
 }
 
 .form-field .hint {

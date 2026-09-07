@@ -7,6 +7,7 @@ mod instance;
 mod minecraft;
 mod mod_meta;
 mod msa;
+mod remote_api;
 mod server_instance;
 mod settings;
 mod state;
@@ -49,6 +50,8 @@ pub fn run() {
             let data_dir = resolve_data_dir(app);
             std::fs::create_dir_all(&data_dir)?;
             app.manage(AppState::new(data_dir));
+            tauri::async_runtime::spawn(AppState::watch_for_dead_instances(app.handle().clone()));
+            tauri::async_runtime::spawn(remote_api::run_supervisor(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,12 +59,25 @@ pub fn run() {
             commands::instances::reorder_instances,
             commands::instances::create_instance,
             commands::instances::create_server_instance,
+            commands::instances::detect_server_instance,
             commands::instances::import_server_folder,
+            commands::instances::get_server_properties,
+            commands::instances::save_server_properties,
+            commands::instances::get_ops,
+            commands::instances::get_whitelist,
+            commands::instances::get_banned_players,
+            commands::instances::remove_op_entry,
+            commands::instances::remove_whitelist_entry,
+            commands::instances::unban_player_entry,
+            commands::instances::add_op_entry,
+            commands::instances::add_whitelist_entry,
+            commands::instances::add_ban_entry,
             commands::instances::delete_instance,
             commands::instances::get_instance,
             commands::instances::list_mods,
             commands::instances::delete_mod,
             commands::instances::get_mods_dir,
+            commands::instances::open_folder,
             commands::instances::check_mod_updates,
             commands::instances::apply_mod_update,
             commands::instances::search_mods,
@@ -77,6 +93,14 @@ pub fn run() {
             commands::instances::get_resourcepack_project_info,
             commands::instances::check_resourcepack_updates,
             commands::instances::apply_resourcepack_update,
+            commands::instances::list_config_files,
+            commands::instances::read_config_file,
+            commands::instances::write_config_file,
+            commands::instances::delete_config_file,
+            commands::instances::get_config_dir,
+            commands::instances::list_log_files,
+            commands::instances::read_log_file,
+            commands::instances::get_logs_dir,
             commands::instances::list_servers,
             commands::instances::save_servers,
             commands::instances::ping_server,
@@ -86,6 +110,7 @@ pub fn run() {
             commands::instances::set_instance_icon,
             commands::instances::remove_instance_icon,
             commands::instances::get_instance_icon,
+            commands::instances::get_server_icon,
             commands::instances::export_instance,
             commands::instances::import_instance,
             commands::import_launcher::suggest_launcher_paths,
@@ -98,6 +123,15 @@ pub fn run() {
             commands::auth::get_settings,
             commands::auth::set_microsoft_client_id,
             commands::auth::set_experimental_server_instances,
+            commands::auth::set_experimental_configs_logs_tabs,
+            commands::auth::set_remote_admin_enabled,
+            commands::auth::set_remote_admin_port,
+            commands::auth::set_remote_admin_instance,
+            commands::auth::set_spacious_instance_view,
+            commands::remote_client::remote_connect,
+            commands::remote_client::remote_reconnect,
+            commands::remote_client::list_remote_servers,
+            commands::remote_client::remove_remote_server,
             commands::appearance::set_background_theme,
             commands::appearance::set_theme_opacity,
             commands::appearance::add_custom_background,
@@ -122,7 +156,11 @@ pub fn run() {
             commands::launch::stop_instance,
             commands::launch::kill_instance,
             commands::launch::send_instance_command,
+            commands::launch::list_online_players,
+            commands::launch::get_server_tps,
             commands::launch::list_running_instances,
+            commands::launch::get_process_stats,
+            commands::launch::detect_running_server,
             commands::updater::is_portable,
             commands::updater::check_portable_update,
             commands::updater::install_portable_update,

@@ -15,6 +15,24 @@ fn classpath_separator() -> &'static str {
     }
 }
 
+/// How to actually invoke the JVM for a dedicated server - the two loaders
+/// Mint supports need genuinely different invocations, not just a different
+/// classpath. A Vanilla server jar has always been a fully self-contained
+/// executable (both the old fat-jar format and the newer "bundler" format
+/// resolve their own entry point from their own manifest), so it's run via
+/// plain `-jar`; passing it a `-cp` and an explicit main class - in
+/// particular the *client's* main class, `net.minecraft.client.main.Main`,
+/// which is what a naive reuse of the client launch path produces - fails
+/// with `ClassNotFoundException` (the server jar has no client classes at
+/// all). Fabric's `KnotServer`, on the other hand, isn't a fat jar and needs
+/// an explicit classpath (the vanilla server jar plus Fabric's own
+/// loader/intermediary libraries, see `fabric::apply_server_loader`) and
+/// main class.
+pub enum ServerJvmTarget {
+    Jar(PathBuf),
+    Classpath { classpath: Vec<PathBuf>, main_class: String },
+}
+
 /// Spawns a dedicated server process and streams its stdout/stderr as the
 /// same `instance-log`/`instance-running-changed`/`launch-progress` events
 /// `minecraft::launch::spawn_and_stream` emits for a client (both are
@@ -23,9 +41,7 @@ fn classpath_separator() -> &'static str {
 /// its handle kept open in `AppState.instance_stdins` rather than left at
 /// its default, so console commands - including a graceful `stop` (see
 /// `commands::launch::stop_instance`) - can be written to the running
-/// process later. Args are trivial compared to the client's argument-
-/// template system: `-Xmx{mem}M {extra_jvm_args} -cp {classpath}
-/// {main_class} nogui`.
+/// process later.
 pub async fn spawn_and_stream_server(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -33,21 +49,26 @@ pub async fn spawn_and_stream_server(
     java_path: &Path,
     memory_mb: u32,
     extra_jvm_args: &[String],
-    classpath: &[PathBuf],
-    main_class: &str,
+    target: ServerJvmTarget,
     cwd: &Path,
 ) -> anyhow::Result<i32> {
-    let classpath_str = classpath
-        .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join(classpath_separator());
-
     let mut cmd = Command::new(java_path);
     cmd.arg(format!("-Xmx{memory_mb}M"));
     cmd.args(extra_jvm_args);
-    cmd.arg("-cp").arg(&classpath_str);
-    cmd.arg(main_class);
+    match &target {
+        ServerJvmTarget::Jar(jar) => {
+            cmd.arg("-jar").arg(jar);
+        }
+        ServerJvmTarget::Classpath { classpath, main_class } => {
+            let classpath_str = classpath
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(classpath_separator());
+            cmd.arg("-cp").arg(classpath_str);
+            cmd.arg(main_class);
+        }
+    }
     cmd.arg("nogui");
     cmd.current_dir(cwd);
     cmd.stdin(Stdio::piped());

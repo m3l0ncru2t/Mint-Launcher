@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { api } from "../api";
 import { BrowseModsDialog } from "./BrowseModsDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -150,7 +149,7 @@ export function ModsPanel({ instanceId }: Props) {
   async function handleOpenFolder() {
     try {
       const dir = await api.getModsDir(instanceId);
-      await openPath(dir);
+      await api.openFolder(dir);
     } catch (e) {
       setError(String(e));
     }

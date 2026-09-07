@@ -14,11 +14,38 @@ export interface TextRun {
   strikethrough: boolean;
 }
 
+export interface PlayerSample {
+  id: string;
+  name: string;
+}
+
 export interface ServerStatus {
   motd: TextRun[];
   online: number | null;
   max: number | null;
   favicon: string | null;
+  sample: PlayerSample[];
+}
+
+export interface OpEntry {
+  uuid: string;
+  name: string;
+  level: number;
+  bypassesPlayerLimit: boolean;
+}
+
+export interface WhitelistEntry {
+  uuid: string;
+  name: string;
+}
+
+export interface BannedPlayerEntry {
+  uuid: string;
+  name: string;
+  created: string;
+  source: string;
+  expires: string;
+  reason: string;
 }
 
 export type InstanceKind = "client" | "server";
@@ -39,6 +66,15 @@ export interface Instance {
   sortOrder: number;
   kind: InstanceKind;
   eulaAccepted: boolean;
+  // Set for a server imported in place - its mods/world/config live here
+  // directly instead of under Mint's own instances folder.
+  externalDir: string | null;
+}
+
+export interface ServerDetection {
+  versionId: string;
+  loader: ModLoader;
+  loaderVersion: string | null;
 }
 
 export interface VersionManifestEntry {
@@ -93,6 +129,11 @@ export interface Settings {
   themeOpacity: Record<string, ThemeOpacity>;
   customBackgroundNames: Record<string, string>;
   experimentalServerInstances: boolean;
+  experimentalConfigsLogsTabs: boolean;
+  remoteAdminEnabled: boolean;
+  remoteAdminPort: number;
+  remoteAdminInstanceId: string | null;
+  spaciousInstanceView: boolean;
 }
 
 export interface CustomBackgroundInfo {
@@ -126,6 +167,18 @@ export interface RunningInstance {
   accountUsername: string | null;
 }
 
+export interface TpsInfo {
+  tps: number;
+  mspt: number;
+}
+
+export interface ProcessStats {
+  cpuPercent: number;
+  memoryMb: number;
+  systemUsedMemoryMb: number;
+  systemTotalMemoryMb: number;
+}
+
 export interface InstanceRunningEvent {
   instanceId: string;
   running: boolean;
@@ -141,10 +194,36 @@ export interface ModFile {
   isDependency: boolean;
 }
 
+/** A server another admin's machine is sharing over the remote admin API -
+ * see remote_api.rs/remote_client.rs. Not a local `Instance` at all (no
+ * folder, no local process) - `token` authorizes every call to `host:port`. */
+export interface RemoteServerLink {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  token: string;
+  versionId: string;
+  loader: ModLoader;
+  hasIcon: boolean;
+}
+
 export interface ResourcePackFile {
   fileName: string;
   size: number;
   enabled: boolean;
+}
+
+export interface ConfigEntry {
+  fileName: string;
+  size: number;
+  isDir: boolean;
+}
+
+export interface LogEntry {
+  fileName: string;
+  size: number;
+  modifiedAt: string | null;
 }
 
 export interface ResourcePackDetails {
