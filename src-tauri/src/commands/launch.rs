@@ -10,7 +10,7 @@ use crate::minecraft::server_launch;
 use crate::msa;
 use crate::state::{AppState, RunningInstance};
 use std::collections::HashMap;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 
 #[tauri::command]
@@ -41,7 +41,7 @@ pub async fn launch_instance(
 /// For a client instance, force-kills the game immediately (unchanged
 /// behavior - a client autosaves constantly, no graceful-shutdown need). For
 /// a server instance, tries a graceful shutdown first: writes `stop` to its
-/// console (see `send_instance_command`) and waits up to 15s for it to exit
+/// console (see `write_console_line`) and waits up to 15s for it to exit
 /// on its own before falling back to a forceful kill - abrupt termination
 /// risks world corruption on a server far more than it does a client.
 #[tauri::command]
@@ -49,19 +49,11 @@ pub async fn stop_instance(app: tauri::AppHandle, state: State<'_, AppState>, in
     let pid = state.running_instances.lock().await.get(&instance_id).map(|r| r.pid);
     let pid = pid.ok_or_else(|| "This instance isn't running".to_string())?;
 
-    let is_server = instance::get_instance(&state.instances_dir(), &instance_id)
-        .ok()
-        .flatten()
-        .is_some_and(|inst| inst.kind == InstanceKind::Server);
-
-    if is_server {
-        let stdin = state.instance_stdins.lock().await.get(&instance_id).cloned();
-        if let Some(stdin) = stdin {
-            let sent = {
-                let mut stdin = stdin.lock().await;
-                stdin.write_all(b"stop\n").await.is_ok() && stdin.flush().await.is_ok()
-            };
-            if sent {
+    let inst = instance::get_instance(&state.instances_dir(), &instance_id).ok().flatten();
+    if let Some(inst) = &inst {
+        if inst.kind == InstanceKind::Server {
+            let game_dir = inst.game_dir(&state.instances_dir());
+            if write_console_line(&state, &game_dir, &instance_id, "stop").await.is_ok() {
                 for _ in 0..30 {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     if !state.running_instances.lock().await.contains_key(&instance_id) {
@@ -75,6 +67,71 @@ pub async fn stop_instance(app: tauri::AppHandle, state: State<'_, AppState>, in
     }
 
     force_kill(&app, &state, &instance_id, pid).await
+}
+
+/// Writes one line to a running server's console - prefers the live stdin
+/// pipe this Mint process itself is holding (lowest latency, and its output
+/// shows up in the already-tailed log same as always), falling back to RCON
+/// (see `minecraft::rcon`) when there's no such pipe, e.g. for an instance
+/// only adopted after Mint itself restarted (see `minecraft::
+/// server_properties::ensure_rcon_enabled` for why RCON survives that when
+/// stdin can't). Errs only when neither path is available.
+async fn write_console_line(
+    state: &AppState,
+    game_dir: &std::path::Path,
+    instance_id: &str,
+    line: &str,
+) -> Result<(), String> {
+    let stdin = state.instance_stdins.lock().await.get(instance_id).cloned();
+    if let Some(stdin) = stdin {
+        let mut stdin = stdin.lock().await;
+        let sent = stdin.write_all(line.as_bytes()).await.is_ok()
+            && stdin.write_all(b"\n").await.is_ok()
+            && stdin.flush().await.is_ok();
+        if sent {
+            return Ok(());
+        }
+    }
+    rcon_execute(game_dir, line)
+        .await
+        .map(|_| ())
+        .map_err(|_| "Console access isn't available for this server".to_string())
+}
+
+/// Broadcasts a `say` countdown (60s, 30s, 10s, 5s) to any connected players
+/// before the actual stop+relaunch, so a restart doesn't just drop everyone
+/// with no warning. Uses `write_console_line`, so this reaches players even
+/// for an instance Mint only adopted after restarting, as long as RCON is
+/// available for it; silently does nothing if neither console path is.
+async fn broadcast_restart_countdown(state: &AppState, instance_id: &str) {
+    let game_dir = instance::get_instance(&state.instances_dir(), instance_id)
+        .ok()
+        .flatten()
+        .map(|inst| inst.game_dir(&state.instances_dir()));
+    const STEPS: [(u64, u64); 4] = [(60, 30), (30, 20), (10, 5), (5, 5)];
+    for (seconds, wait_after) in STEPS {
+        if let Some(game_dir) = &game_dir {
+            let message = format!("say Server restarting in {seconds} seconds");
+            let _ = write_console_line(state, game_dir, instance_id, &message).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(wait_after)).await;
+    }
+}
+
+/// Restart, with warning: if the instance is currently running, broadcasts
+/// the countdown above before stopping it, then launches it again either
+/// way. Used by both the local Restart button and the remote `/restart`
+/// endpoint, so an admin restarting someone else's server gives the same
+/// heads-up a local restart does.
+#[tauri::command]
+pub async fn restart_instance(app: tauri::AppHandle, state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    let running = state.running_instances.lock().await.contains_key(&instance_id);
+    if running {
+        broadcast_restart_countdown(&state, &instance_id).await;
+        let _ = stop_instance(app.clone(), app.state::<AppState>(), instance_id.clone()).await;
+    }
+    launch_instance(app.clone(), app.state::<AppState>(), instance_id, None).await?;
+    Ok(())
 }
 
 /// Always an immediate forceful kill, regardless of instance kind -
@@ -109,23 +166,35 @@ async fn force_kill(app: &tauri::AppHandle, state: &AppState, instance_id: &str,
     Ok(())
 }
 
-/// Writes a line to a running server instance's console (its stdin) - the
-/// same mechanism `stop_instance` uses to send a graceful `stop`, exposed
-/// directly so the UI can offer a free-form server console input.
+/// Writes a line to a running server instance's console via
+/// `write_console_line` - the same mechanism `stop_instance` uses to send a
+/// graceful `stop`, exposed directly so the UI can offer a free-form server
+/// console input and the kick/ban/op/whitelist actions in `PlayersPanel`.
 #[tauri::command]
 pub async fn send_instance_command(state: State<'_, AppState>, instance_id: String, command: String) -> Result<(), String> {
-    let stdin = state
-        .instance_stdins
-        .lock()
-        .await
-        .get(&instance_id)
-        .cloned()
-        .ok_or_else(|| "This instance isn't a running server".to_string())?;
-    let mut stdin = stdin.lock().await;
-    stdin.write_all(command.as_bytes()).await.map_err(|e| e.to_string())?;
-    stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
-    stdin.flush().await.map_err(|e| e.to_string())?;
-    Ok(())
+    let inst = instance::get_instance(&state.instances_dir(), &instance_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Instance not found".to_string())?;
+    let game_dir = inst.game_dir(&state.instances_dir());
+    write_console_line(&state, &game_dir, &instance_id, &command).await
+}
+
+/// Reads a server's RCON port/password out of its `server.properties`, if
+/// it's enabled there - `None` if the server predates `ensure_rcon_enabled`
+/// and hasn't been restarted since, or a user has since disabled it.
+fn rcon_creds(game_dir: &std::path::Path) -> Option<(u16, String)> {
+    let props = crate::minecraft::server_properties::read_properties(game_dir);
+    if props.get("enable-rcon").map(String::as_str) != Some("true") {
+        return None;
+    }
+    let port = props.get("rcon.port")?.parse().ok()?;
+    Some((port, props.get("rcon.password")?.clone()))
+}
+
+async fn rcon_execute(game_dir: &std::path::Path, command: &str) -> Result<String, String> {
+    let (port, password) =
+        rcon_creds(game_dir).ok_or_else(|| "RCON isn't available for this server".to_string())?;
+    crate::minecraft::rcon::execute(port, &password, command).await.map_err(|e| e.to_string())
 }
 
 /// Reads the last `max_bytes` of a file as (possibly lossily-decoded) text -
@@ -180,11 +249,31 @@ fn parse_list_response(text: &str) -> Option<(u32, u32, Vec<String>)> {
 /// TCPShield, which rejects any direct connection to the game port -
 /// including Mint's own status ping - as unauthorized. Sending the server's
 /// own `list` command through its console and reading the response back off
-/// its log sidesteps the network entirely, so it works regardless of
-/// firewalling/proxying in front of the port. Only available for an instance
-/// Mint itself is holding the stdin for (i.e. Mint launched it, or at least
-/// hasn't restarted since) - `PlayersPanel`/`InstanceDetail` fall back to
-/// `ping_server` when this errors.
+/// its log (or, if there's no live stdin, over RCON - see `rcon_execute`)
+/// sidesteps the network entirely, so it works regardless of
+/// firewalling/proxying in front of the port. `PlayersPanel`/`InstanceDetail`
+/// fall back to `ping_server` only if both of these are unavailable.
+async fn list_via_stdin(
+    state: &AppState,
+    game_dir: &std::path::Path,
+    instance_id: &str,
+) -> Option<(u32, u32, Vec<String>)> {
+    let stdin = state.instance_stdins.lock().await.get(instance_id).cloned()?;
+    {
+        let mut stdin = stdin.lock().await;
+        stdin.write_all(b"list\n").await.ok()?;
+        stdin.flush().await.ok()?;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    let log_path = game_dir.join("logs").join("latest.log");
+    parse_list_response(&tail_lines(&log_path, 8192))
+}
+
+async fn list_via_rcon(game_dir: &std::path::Path) -> Option<(u32, u32, Vec<String>)> {
+    let response = rcon_execute(game_dir, "list").await.ok()?;
+    parse_list_response(&response)
+}
+
 #[tauri::command]
 pub async fn list_online_players(
     state: State<'_, AppState>,
@@ -193,25 +282,14 @@ pub async fn list_online_players(
     let inst = instance::get_instance(&state.instances_dir(), &instance_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Instance not found".to_string())?;
+    let game_dir = inst.game_dir(&state.instances_dir());
 
-    let stdin = state
-        .instance_stdins
-        .lock()
-        .await
-        .get(&instance_id)
-        .cloned()
-        .ok_or_else(|| "Console access isn't available for this server".to_string())?;
-
-    let log_path = inst.game_dir(&state.instances_dir()).join("logs").join("latest.log");
-    {
-        let mut stdin = stdin.lock().await;
-        stdin.write_all(b"list\n").await.map_err(|e| e.to_string())?;
-        stdin.flush().await.map_err(|e| e.to_string())?;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-
-    let (online, max, names) = parse_list_response(&tail_lines(&log_path, 8192))
-        .ok_or_else(|| "No response from the server console".to_string())?;
+    let (online, max, names) = match list_via_stdin(&state, &game_dir, &instance_id).await {
+        Some(v) => v,
+        None => list_via_rcon(&game_dir)
+            .await
+            .ok_or_else(|| "Console access isn't available for this server".to_string())?,
+    };
 
     let mut sample = Vec::with_capacity(names.len());
     for name in names {
@@ -272,45 +350,50 @@ fn parse_gametime_response(text: &str) -> Option<i64> {
     result
 }
 
+async fn gametime_via_stdin(state: &AppState, game_dir: &std::path::Path, instance_id: &str) -> Option<i64> {
+    let stdin = state.instance_stdins.lock().await.get(instance_id).cloned()?;
+    {
+        let mut stdin = stdin.lock().await;
+        stdin.write_all(b"time query gametime\n").await.ok()?;
+        stdin.flush().await.ok()?;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // 8KB, matching `list_via_stdin` - a busy modded server can log a lot in
+    // the ~400ms between sending the command and reading this back, and a
+    // too-small window risks the response having already scrolled past it.
+    let log_path = game_dir.join("logs").join("latest.log");
+    parse_gametime_response(&tail_lines(&log_path, 8192))
+}
+
+async fn gametime_via_rcon(game_dir: &std::path::Path) -> Option<i64> {
+    let response = rcon_execute(game_dir, "time query gametime").await.ok()?;
+    parse_gametime_response(&response)
+}
+
 /// TPS/MSPT aren't exposed by any vanilla command directly, but the world's
 /// own tick counter is - `time query gametime` (a completely vanilla command,
 /// no profiler mod like spark needed) reports how many ticks have ever
 /// elapsed. Comparing that against a previous sample and the real time
 /// between them gives an honest tick rate/tick duration for any server this
-/// launcher has console access to. Returns `None` on the first call for a
-/// given instance (and after nothing changed, e.g. an empty server some
-/// packs pause ticking on) since there's no prior sample yet to diff against
-/// - the same "first call reads nothing meaningful" shape `get_process_stats`
-/// already has for CPU%.
+/// launcher has console access to, over stdin or RCON (see `rcon_execute`).
+/// Returns `None` on the first call for a given instance (and after nothing
+/// changed, e.g. an empty server some packs pause ticking on) since there's
+/// no prior sample yet to diff against - the same "first call reads nothing
+/// meaningful" shape `get_process_stats` already has for CPU%.
 #[tauri::command]
 pub async fn get_server_tps(state: State<'_, AppState>, instance_id: String) -> Result<Option<TpsInfo>, String> {
     let inst = instance::get_instance(&state.instances_dir(), &instance_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Instance not found".to_string())?;
+    let game_dir = inst.game_dir(&state.instances_dir());
 
-    let stdin = state
-        .instance_stdins
-        .lock()
-        .await
-        .get(&instance_id)
-        .cloned()
-        .ok_or_else(|| "Console access isn't available for this server".to_string())?;
-
-    let log_path = inst.game_dir(&state.instances_dir()).join("logs").join("latest.log");
-    {
-        let mut stdin = stdin.lock().await;
-        stdin.write_all(b"time query gametime\n").await.map_err(|e| e.to_string())?;
-        stdin.flush().await.map_err(|e| e.to_string())?;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let tick = match gametime_via_stdin(&state, &game_dir, &instance_id).await {
+        Some(t) => t,
+        None => gametime_via_rcon(&game_dir)
+            .await
+            .ok_or_else(|| "Console access isn't available for this server".to_string())?,
+    };
     let now = std::time::Instant::now();
-
-    // 8KB, matching `list_online_players` - a busy modded server can log a
-    // lot in the ~400ms between sending the command and reading this back,
-    // and a too-small window risks the response having already scrolled
-    // past it.
-    let tick = parse_gametime_response(&tail_lines(&log_path, 8192))
-        .ok_or_else(|| "No response from the server console".to_string())?;
 
     let prev = state.tps_samples.lock().await.insert(instance_id, (now, tick));
     let Some((prev_instant, prev_tick)) = prev else {
@@ -673,6 +756,7 @@ async fn do_launch_server(app: &tauri::AppHandle, state: &AppState, inst: &insta
     // time - so this always reflects the explicit EULA checkbox the user
     // already had to check to get this far.
     std::fs::write(game_dir.join("eula.txt"), "eula=true\n")?;
+    crate::minecraft::server_properties::ensure_rcon_enabled(&game_dir)?;
 
     // Vanilla and Fabric need genuinely different invocations, not just a
     // different classpath - see `server_launch::ServerJvmTarget`.

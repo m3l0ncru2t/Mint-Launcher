@@ -170,6 +170,22 @@ button {
   letter-spacing: 0.2px;
 }
 
+.donate-btn {
+  background: #ffdd57;
+  color: #3a2f00;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.donate-btn:hover {
+  background: #ffd23f;
+}
+
 .instance-list {
   flex: 1;
   overflow-y: auto;
@@ -1117,6 +1133,57 @@ button {
 
 .log-console .placeholder {
   color: var(--text-2);
+}
+
+/* ---------- Chat tab ---------- */
+
+.chat-console {
+  font-family: inherit;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-line {
+  padding: 2px 0;
+}
+
+.chat-line-player {
+  font-weight: 600;
+  color: var(--mint-400);
+}
+
+.chat-line-text {
+  color: var(--text-0);
+}
+
+.chat-line-system {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+.chat-line-whisper {
+  background: rgba(52, 211, 153, 0.08);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.chat-line-whisper .chat-line-player {
+  color: var(--text-0);
+}
+
+.chat-line-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--mint-400);
+  border: 1px solid var(--mint-500);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 6px;
 }
 
 /* ---------- Modal ---------- */

@@ -8,6 +8,7 @@ pub mod modrinth;
 pub mod nbt;
 pub mod profile;
 pub mod resourcepacks;
+pub mod rcon;
 pub mod rules;
 pub mod server_admin;
 pub mod server_launch;

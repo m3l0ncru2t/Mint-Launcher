@@ -52,6 +52,13 @@ fn build_router(app: AppHandle) -> Router {
         .route("/status", get(status))
         .route("/stats", get(stats))
         .route("/players", get(players))
+        .route("/command", post(send_command))
+        .route("/ops", get(list_ops).post(add_op))
+        .route("/ops/{name}", delete(remove_op))
+        .route("/whitelist", get(list_whitelist).post(add_whitelist))
+        .route("/whitelist/{name}", delete(remove_whitelist))
+        .route("/bans", get(list_bans).post(add_ban))
+        .route("/bans/{name}", delete(remove_ban))
         .route("/start", post(start))
         .route("/stop", post(stop))
         .route("/restart", post(restart))
@@ -705,6 +712,146 @@ async fn players(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
+#[derive(Debug, Deserialize)]
+struct CommandRequest {
+    command: String,
+}
+
+/// Runs a raw console command - what the kick/ban/op/deop/whitelist buttons
+/// in the Players tab send while the server is running, exactly like the
+/// local `PlayersPanel` does via `sendInstanceCommand`. Already
+/// stdin-or-RCON (see `commands::launch::write_console_line`), so this works
+/// the same whether or not the host's own console link is currently alive.
+async fn send_command(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<CommandRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::launch::send_instance_command(state, id, body.command)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct UsernameRequest {
+    username: String,
+}
+
+/// The four list endpoints below mirror `PlayersPanel`'s "while stopped,
+/// edit ops.json/whitelist.json/banned-players.json directly" path (see
+/// `commands::instances::ensure_not_running`) - for managing the whitelist
+/// before ever starting the server, say. While it's running, the frontend
+/// uses `send_command` above instead, same as the local UI does.
+async fn list_ops(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::minecraft::server_admin::OpEntry>>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::get_ops(state, id).map(Json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn add_op(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<UsernameRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::add_op_entry(state, id, body.username).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_op(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::remove_op_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_whitelist(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::minecraft::server_admin::WhitelistEntry>>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::get_whitelist(state, id).map(Json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn add_whitelist(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<UsernameRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::add_whitelist_entry(state, id, body.username)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_whitelist(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::remove_whitelist_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_bans(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::minecraft::server_admin::BannedPlayerEntry>>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::get_banned_players(state, id).map(Json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn add_ban(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<UsernameRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::add_ban_entry(state, id, body.username, String::new())
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_ban(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::unban_player_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn start(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
     require_session(&app, &headers).await?;
     let (_, id) = shared_instance(&app).await?;
@@ -728,11 +875,11 @@ async fn stop(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Status
 async fn restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
     require_session(&app, &headers).await?;
     let (_, id) = shared_instance(&app).await?;
-    // Best-effort stop (it may not even be running yet) followed by a fresh
-    // launch - the same two-step "Restart" already does client-side in the
-    // local UI, just performed here in one request instead of two.
-    let _ = commands::launch::stop_instance(app.clone(), app.state::<AppState>(), id.clone()).await;
-    commands::launch::launch_instance(app.clone(), app.state::<AppState>(), id, None)
+    // Same countdown-then-relaunch `restart_instance` the local Restart
+    // button calls, so a remote admin's restart gives players the same
+    // in-game heads-up a local one does - this request simply stays open
+    // for the ~60s countdown before responding.
+    commands::launch::restart_instance(app.clone(), app.state::<AppState>(), id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)

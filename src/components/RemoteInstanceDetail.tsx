@@ -1,8 +1,21 @@
 import { useEffect, useRef, useState } from "react";
+import { parseChatLines } from "../chatParser";
 import { remoteApi } from "../remoteApi";
+import { AddByUsername } from "./PlayersPanel";
+import { ChatLine } from "./ChatPanel";
+import { PlayerAvatar } from "./PlayerAvatar";
 import { RemoteBrowseModsDialog } from "./RemoteBrowseModsDialog";
 import { RemoteBrowseResourcePacksDialog } from "./RemoteBrowseResourcePacksDialog";
-import type { ModFile, ModUpdateInfo, PlayerSample, RemoteServerLink, ResourcePackFile } from "../types";
+import type {
+  BannedPlayerEntry,
+  ModFile,
+  ModUpdateInfo,
+  OpEntry,
+  PlayerSample,
+  RemoteServerLink,
+  ResourcePackFile,
+  WhitelistEntry,
+} from "../types";
 
 interface Props {
   link: RemoteServerLink;
@@ -11,7 +24,7 @@ interface Props {
   spaciousView: boolean;
 }
 
-type Tab = "mods" | "resourcepacks" | "console" | "players";
+type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players";
 
 /// A parallel, remote-only detail view rather than a "local vs. remote"
 /// branch threaded through InstanceDetail/ServerConsolePanel/PlayersPanel -
@@ -330,6 +343,9 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             <button className={`files-tab${tab === "console" ? " active" : ""}`} onClick={() => setTab("console")}>
               Console
             </button>
+            <button className={`files-tab${tab === "chat" ? " active" : ""}`} onClick={() => setTab("chat")}>
+              Chat
+            </button>
             <button className={`files-tab${tab === "players" ? " active" : ""}`} onClick={() => setTab("players")}>
               Players
             </button>
@@ -339,7 +355,10 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
           {tab === "console" && (
             <RemoteConsoleTab link={link} isRunning={!!running} onTokenRefreshed={onTokenRefreshed} />
           )}
-          {tab === "players" && <RemotePlayersTab players={players} running={running} />}
+          {tab === "chat" && <RemoteChatTab link={link} onTokenRefreshed={onTokenRefreshed} />}
+          {tab === "players" && (
+            <RemotePlayersTab link={link} onTokenRefreshed={onTokenRefreshed} players={players} running={running} />
+          )}
         </div>
       </div>
     </div>
@@ -787,28 +806,271 @@ function RemoteConsoleTab({
   );
 }
 
+function RemoteChatTab({
+  link,
+  onTokenRefreshed,
+}: {
+  link: RemoteServerLink;
+  onTokenRefreshed: (token: string) => void;
+}) {
+  const api = remoteApi(link, onTokenRefreshed);
+  const [lines, setLines] = useState<string[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getConsoleTail()
+      .then((text) => !cancelled && setLines(text ? text.split("\n") : []))
+      .catch(() => {});
+
+    const disconnect = api.connectConsole(
+      (line) => !cancelled && setLines((prev) => [...prev.slice(-2000), line]),
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.id]);
+
+  const entries = parseChatLines(lines.join("\n"));
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [entries.length]);
+
+  return (
+    <>
+      <div className="panel-header">
+        <h4>Chat</h4>
+      </div>
+      <div className="log-console chat-console" ref={logRef}>
+        {entries.length === 0 ? (
+          <span className="placeholder">
+            Chat, joins/leaves, and private messages will appear here once the server's running.
+          </span>
+        ) : (
+          entries.map((entry, i) => <ChatLine key={i} entry={entry} />)
+        )}
+      </div>
+    </>
+  );
+}
+
+/// Mirrors the local `PlayersPanel` exactly: kick/op/ban on whoever's online
+/// (via `send_command`, since the host's `write_console_line` already tries
+/// stdin then RCON - see `commands::launch`), plus whitelist/ops/bans list
+/// management, using the same "console command while running, direct file
+/// edit while stopped" split the local version does (see `remote_api.rs`'s
+/// `send_command` vs. `list_ops`/`add_op`/... handlers).
 function RemotePlayersTab({
+  link,
+  onTokenRefreshed,
   players,
   running,
 }: {
+  link: RemoteServerLink;
+  onTokenRefreshed: (token: string) => void;
   players: { online: number; max: number; sample: PlayerSample[] } | null;
   running: boolean | null;
 }) {
+  const api = remoteApi(link, onTokenRefreshed);
+  const [ops, setOps] = useState<OpEntry[]>([]);
+  const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
+  const [bans, setBans] = useState<BannedPlayerEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  function refreshLists() {
+    api.getOps().then(setOps).catch(() => {});
+    api.getWhitelist().then(setWhitelist).catch(() => {});
+    api.getBannedPlayers().then(setBans).catch(() => {});
+  }
+
+  useEffect(() => {
+    refreshLists();
+    const interval = setInterval(refreshLists, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.id]);
+
+  async function run(actionKey: string, action: () => Promise<unknown>) {
+    setBusyAction(actionKey);
+    setError(null);
+    try {
+      await action();
+      // Console commands (kick/ban/op/...) take a moment to land and update
+      // the on-disk json files - a short delay before refetching avoids
+      // showing stale state right after the action completes.
+      setTimeout(refreshLists, 400);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  const isOp = (name: string) => ops.some((o) => o.name.toLowerCase() === name.toLowerCase());
+  const isRunning = !!running;
+
+  function handleKick(name: string) {
+    run(`kick-${name}`, () => api.sendCommand(`kick ${name}`));
+  }
+
+  function handleBanOnline(name: string) {
+    run(`ban-${name}`, () => api.sendCommand(`ban ${name}`));
+  }
+
+  function handleToggleOp(name: string) {
+    const key = `op-${name}`;
+    if (isOp(name)) {
+      run(key, () => (isRunning ? api.sendCommand(`deop ${name}`) : api.removeOpEntry(name)));
+    } else {
+      run(key, () => (isRunning ? api.sendCommand(`op ${name}`) : api.addOpEntry(name)));
+    }
+  }
+
+  function handleAddOp(username: string) {
+    run(`add-op-${username}`, () => (isRunning ? api.sendCommand(`op ${username}`) : api.addOpEntry(username)));
+  }
+
+  function handleRemoveOp(name: string) {
+    run(`remove-op-${name}`, () => (isRunning ? api.sendCommand(`deop ${name}`) : api.removeOpEntry(name)));
+  }
+
+  function handleAddWhitelist(username: string) {
+    run(`add-wl-${username}`, () =>
+      isRunning ? api.sendCommand(`whitelist add ${username}`) : api.addWhitelistEntry(username),
+    );
+  }
+
+  function handleRemoveWhitelist(name: string) {
+    run(`remove-wl-${name}`, () =>
+      isRunning ? api.sendCommand(`whitelist remove ${name}`) : api.removeWhitelistEntry(name),
+    );
+  }
+
+  function handleAddBan(username: string) {
+    run(`add-ban-${username}`, () => (isRunning ? api.sendCommand(`ban ${username}`) : api.addBanEntry(username)));
+  }
+
+  function handleUnban(name: string) {
+    run(`unban-${name}`, () => (isRunning ? api.sendCommand(`pardon ${name}`) : api.unbanPlayerEntry(name)));
+  }
+
   return (
-    <div className="mods-list">
+    <div className="mods-list players-panel">
       <div className="panel-header">
         <h4>Online Players{players ? ` (${players.online} / ${players.max})` : ""}</h4>
+        <div className="panel-actions">
+          <button className="ghost-btn small" onClick={refreshLists}>
+            Refresh
+          </button>
+        </div>
       </div>
       {!running && <div className="placeholder">Start the server to see who's online.</div>}
       {running && players && players.sample.length === 0 && <div className="placeholder">No players online.</div>}
+      {running && players == null && <div className="placeholder">Waiting for a response from the server…</div>}
       {running &&
         players?.sample.map((p) => (
-          <div key={p.id} className="mod-row" style={{ cursor: "default" }}>
+          <div key={p.id} className="mod-row player-row">
+            <PlayerAvatar uuid={p.id} username={p.name} className="player-row-avatar" size={24} />
             <div className="mod-name-block">
               <span className="mod-name">{p.name}</span>
+              {isOp(p.name) && <span className="mod-filename">Operator</span>}
+            </div>
+            <div className="player-row-actions">
+              <button
+                className="ghost-btn small"
+                disabled={busyAction === `op-${p.name}`}
+                onClick={() => handleToggleOp(p.name)}
+              >
+                {isOp(p.name) ? "De-op" : "Op"}
+              </button>
+              <button
+                className="ghost-btn small"
+                disabled={busyAction === `kick-${p.name}`}
+                onClick={() => handleKick(p.name)}
+              >
+                Kick
+              </button>
+              <button
+                className="danger-btn small"
+                disabled={busyAction === `ban-${p.name}`}
+                onClick={() => handleBanOnline(p.name)}
+              >
+                Ban
+              </button>
             </div>
           </div>
         ))}
+
+      {error && <div className="error-text">{error}</div>}
+
+      <div className="panel-header players-section-header">
+        <h4>Whitelist{whitelist.length > 0 ? ` (${whitelist.length})` : ""}</h4>
+      </div>
+      <AddByUsername placeholder="Add a username to the whitelist…" busy={!!busyAction} onAdd={handleAddWhitelist} />
+      {whitelist.length === 0 && <div className="placeholder">Nobody's whitelisted.</div>}
+      {whitelist.map((w) => (
+        <div key={w.uuid} className="mod-row player-row">
+          <PlayerAvatar uuid={w.uuid} username={w.name} className="player-row-avatar" size={24} />
+          <div className="mod-name-block">
+            <span className="mod-name">{w.name}</span>
+          </div>
+          <button
+            className="icon-btn"
+            title="Remove from whitelist"
+            disabled={busyAction === `remove-wl-${w.name}`}
+            onClick={() => handleRemoveWhitelist(w.name)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <div className="panel-header players-section-header">
+        <h4>Operators{ops.length > 0 ? ` (${ops.length})` : ""}</h4>
+      </div>
+      <AddByUsername placeholder="Add a username as operator…" busy={!!busyAction} onAdd={handleAddOp} />
+      {ops.length === 0 && <div className="placeholder">No operators.</div>}
+      {ops.map((o) => (
+        <div key={o.uuid} className="mod-row player-row">
+          <PlayerAvatar uuid={o.uuid} username={o.name} className="player-row-avatar" size={24} />
+          <div className="mod-name-block">
+            <span className="mod-name">{o.name}</span>
+            <span className="mod-filename">Level {o.level}</span>
+          </div>
+          <button
+            className="icon-btn"
+            title="Remove operator"
+            disabled={busyAction === `remove-op-${o.name}`}
+            onClick={() => handleRemoveOp(o.name)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+
+      <div className="panel-header players-section-header">
+        <h4>Banned Players{bans.length > 0 ? ` (${bans.length})` : ""}</h4>
+      </div>
+      <AddByUsername placeholder="Ban a username…" busy={!!busyAction} onAdd={handleAddBan} />
+      {bans.length === 0 && <div className="placeholder">Nobody's banned.</div>}
+      {bans.map((b) => (
+        <div key={b.uuid} className="mod-row player-row">
+          <PlayerAvatar uuid={b.uuid} username={b.name} className="player-row-avatar" size={24} />
+          <div className="mod-name-block">
+            <span className="mod-name">{b.name}</span>
+            {b.reason && <span className="mod-filename">{b.reason}</span>}
+          </div>
+          <button className="ghost-btn small" disabled={busyAction === `unban-${b.name}`} onClick={() => handleUnban(b.name)}>
+            Unban
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -74,6 +74,7 @@ export function InstanceDetail({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -281,13 +282,16 @@ export function InstanceDetail({
 
   async function handleRestart() {
     setStopError(null);
+    setRestarting(true);
     try {
-      await api.stopInstance(instance.id);
+      // Broadcasts the 60/30/10/5-second in-game warning itself before
+      // actually stopping and relaunching - see restart_instance.
+      await api.restartInstance(instance.id);
     } catch (e) {
       setStopError(String(e));
-      return;
+    } finally {
+      setRestarting(false);
     }
-    handlePlay();
   }
 
   async function handleCopyConsole() {
@@ -346,8 +350,8 @@ export function InstanceDetail({
           {isServer ? (
             isRunning ? (
               <>
-                <button className="restart-btn" onClick={handleRestart}>
-                  Restart
+                <button className="restart-btn" onClick={handleRestart} disabled={restarting}>
+                  {restarting ? "Restarting…" : "Restart"}
                 </button>
                 <button className="stop-btn" onClick={handleStop}>
                   Stop

@@ -1,13 +1,16 @@
 import { api } from "./api";
 import type {
+  BannedPlayerEntry,
   InstalledModInfo,
   InstallSummary,
   ModFile,
   ModSearchPage,
   ModUpdateInfo,
+  OpEntry,
   RemoteServerLink,
   ResourcePackFile,
   ServerStatus,
+  WhitelistEntry,
 } from "./types";
 
 /** Talks directly to another machine's Mint Launcher over the network (see
@@ -172,6 +175,43 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
       ),
 
     getPlayers: () => request("/players").then((r) => r.json() as Promise<ServerStatus>),
+
+    /** Runs a raw console command - what the Players tab's kick/ban/op/deop/
+     * whitelist buttons send while the server is running, same as the local
+     * `sendInstanceCommand` does. */
+    sendCommand: (command: string) =>
+      request("/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command }),
+      }),
+
+    getOps: () => request("/ops").then((r) => r.json() as Promise<OpEntry[]>),
+    addOpEntry: (username: string) =>
+      request("/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      }),
+    removeOpEntry: (name: string) => request(`/ops/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+    getWhitelist: () => request("/whitelist").then((r) => r.json() as Promise<WhitelistEntry[]>),
+    addWhitelistEntry: (username: string) =>
+      request("/whitelist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      }),
+    removeWhitelistEntry: (name: string) => request(`/whitelist/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+    getBannedPlayers: () => request("/bans").then((r) => r.json() as Promise<BannedPlayerEntry[]>),
+    addBanEntry: (username: string) =>
+      request("/bans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      }),
+    unbanPlayerEntry: (name: string) => request(`/bans/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
     start: () => request("/start", { method: "POST" }),
     stop: () => request("/stop", { method: "POST" }),

@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import appIcon from "../assets/app-icon.png";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { ACTIVE_STAGES } from "./InstanceDetail";
 import { InstanceIcon } from "./InstanceIcon";
 import { PlayerAvatar } from "./PlayerAvatar";
+import { RemoteServerIcon } from "./RemoteServerIcon";
 import type { GameProfile, Instance, LaunchProgressEvent, RemoteServerLink, RunningInstance } from "../types";
 
 interface Props {
@@ -165,6 +167,9 @@ export function Sidebar({
       <div className="sidebar-header">
         <img src={appIcon} alt="" className="logo" />
         <h1>Mint Launcher</h1>
+        <button className="donate-btn" onClick={() => openUrl("https://buymeacoffee.com/mintymc")} title="Buy me a coffee">
+          Donate
+        </button>
       </div>
 
       <div className="instance-list">
@@ -194,9 +199,7 @@ export function Sidebar({
             role="button"
             tabIndex={0}
           >
-            <div className="instance-icon" style={{ display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>
-              {link.name.slice(0, 1).toUpperCase()}
-            </div>
+            <RemoteServerIcon link={link} className="instance-icon" />
             <div className="instance-row-text">
               <div className="instance-row-name">{link.name}</div>
               <div className="instance-row-meta">

@@ -14,8 +14,9 @@ interface OnlinePlayer {
 }
 
 /** A tiny "type a username, hit Add" row - reused for the whitelist/ops/bans
- * sections below the online-players list. */
-function AddByUsername({
+ * sections below the online-players list, and (exported) by
+ * `RemoteInstanceDetail`'s Players tab for the same rows there. */
+export function AddByUsername({
   placeholder,
   busy,
   onAdd,
