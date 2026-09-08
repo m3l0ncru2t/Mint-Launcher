@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { parseChatLines } from "../chatParser";
-import { remoteApi } from "../remoteApi";
+import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -756,20 +756,11 @@ function RemoteConsoleTab({
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    api
-      .getConsoleTail()
-      .then((text) => !cancelled && setLines(text ? text.split("\n") : []))
-      .catch(() => {});
-
-    const disconnect = api.connectConsole(
-      (line) => !cancelled && setLines((prev) => [...prev.slice(-2000), line]),
-      () => {},
+    return streamConsoleTailThenLive(
+      api,
+      (initial) => setLines(initial),
+      (line) => setLines((prev) => [...prev.slice(-2000), line]),
     );
-    return () => {
-      cancelled = true;
-      disconnect();
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
@@ -815,38 +806,25 @@ function RemoteChatTab({
 }) {
   const api = remoteApi(link, onTokenRefreshed);
   const [lines, setLines] = useState<string[]>([]);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    api
-      .getConsoleTail()
-      .then((text) => !cancelled && setLines(text ? text.split("\n") : []))
-      .catch(() => {});
-
-    const disconnect = api.connectConsole(
-      (line) => !cancelled && setLines((prev) => [...prev.slice(-2000), line]),
-      () => {},
+    return streamConsoleTailThenLive(
+      api,
+      (initial) => setLines(initial),
+      (line) => setLines((prev) => [...prev.slice(-2000), line]),
     );
-    return () => {
-      cancelled = true;
-      disconnect();
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
   const entries = parseChatLines(lines.join("\n"));
-
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [entries.length]);
 
   return (
     <>
       <div className="panel-header">
         <h4>Chat</h4>
       </div>
-      <div className="log-console chat-console" ref={logRef}>
+      {/* Deliberately not auto-scrolled - see the local ChatPanel for why. */}
+      <div className="log-console chat-console">
         {entries.length === 0 ? (
           <span className="placeholder">
             Chat, joins/leaves, and private messages will appear here once the server's running.

@@ -226,8 +226,16 @@ fn pid_is_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn pid_is_alive(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    // Without CREATE_NO_WINDOW, spawning a console program like tasklist
+    // from a windowed (non-console) app briefly flashes a cmd window - this
+    // runs every 5s for every running instance (see `watch_for_dead_instances`),
+    // so on Windows it was doing that continuously the whole time anything
+    // was running.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     std::process::Command::new("tasklist")
         .args(["/NH", "/FI", &format!("PID eq {pid}")])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|out| String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()))
         .unwrap_or(false)

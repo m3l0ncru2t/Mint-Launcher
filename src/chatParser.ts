@@ -52,8 +52,26 @@ export function parseChatLine(rawLine: string): ChatEntry | null {
 }
 
 export function parseChatLines(text: string): ChatEntry[] {
-  return text
+  const entries = text
     .split("\n")
     .map(parseChatLine)
     .filter((entry): entry is ChatEntry => entry !== null);
+
+  // Some modpacks' log4j setups genuinely double-log every line (a second
+  // appender mirroring the first), and a remote connection's initial tail
+  // fetch racing its live WebSocket can very rarely redeliver a line the
+  // tail already covered (see RemoteChatTab/RemoteConsoleTab) - either way,
+  // the exact same chat/join/leave/whisper appearing twice in a row is
+  // effectively always one of these, not a player retyping the identical
+  // message a moment later, so collapse immediate repeats.
+  return entries.filter((entry, i) => {
+    const prev = entries[i - 1];
+    if (!prev) return true;
+    return !(
+      prev.type === entry.type &&
+      prev.player === entry.player &&
+      prev.target === entry.target &&
+      prev.message === entry.message
+    );
+  });
 }

@@ -152,6 +152,7 @@ pub fn run() {
             commands::auth::set_cape,
             commands::auth::remove_cape,
             commands::auth::get_player_skin_url,
+            commands::auth::lookup_player_uuid,
             commands::launch::launch_instance,
             commands::launch::stop_instance,
             commands::launch::restart_instance,

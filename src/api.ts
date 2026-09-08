@@ -277,6 +277,8 @@ export const api = {
 
   getPlayerSkinUrl: (uuid: string) => invoke<string | null>("get_player_skin_url", { uuid }),
 
+  lookupPlayerUuid: (username: string) => invoke<string | null>("lookup_player_uuid", { username }),
+
   launchInstance: (instanceId: string, serverAddress?: string) =>
     invoke<number>("launch_instance", { instanceId, serverAddress: serverAddress ?? null }),
 

@@ -1147,6 +1147,17 @@ button {
 
 .chat-line {
   padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-line-avatar {
+  flex-shrink: 0;
+}
+
+.chat-line-body {
+  min-width: 0;
 }
 
 .chat-line-player {

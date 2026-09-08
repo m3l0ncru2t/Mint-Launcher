@@ -219,3 +219,36 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
     kill: () => request("/kill", { method: "POST" }),
   };
 }
+
+/** Fetches the console tail, then only *after* it resolves connects the
+ * live WebSocket - fetching both concurrently let the tail's file read on
+ * the host race the WS's listener registration (also on the host), so a
+ * line written in that gap could land in the tail snapshot *and* still get
+ * delivered live, appearing twice in `RemoteConsoleTab`/`RemoteChatTab`.
+ * Sequencing them removes the overlap: nothing the tail already captured
+ * can also arrive live, since the live listener only registers once the
+ * tail response - which necessarily completed first on the host - is back.
+ * Returns a cleanup function, safe to call even before the tail resolves. */
+export function streamConsoleTailThenLive(
+  api: ReturnType<typeof remoteApi>,
+  onInitial: (lines: string[]) => void,
+  onLine: (line: string) => void,
+): () => void {
+  let cancelled = false;
+  let disconnect: (() => void) | null = null;
+
+  api
+    .getConsoleTail()
+    .then((text) => {
+      if (!cancelled) onInitial(text ? text.split("\n") : []);
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (!cancelled) disconnect = api.connectConsole(onLine, () => {});
+    });
+
+  return () => {
+    cancelled = true;
+    disconnect?.();
+  };
+}

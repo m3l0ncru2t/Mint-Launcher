@@ -257,6 +257,28 @@ pub async fn get_player_skin_url(state: State<'_, AppState>, uuid: String) -> Re
     Ok(profile::fetch_public_skin_url(&state.http, &uuid).await)
 }
 
+/// Resolves a username to its Mojang account UUID, so a player head can be
+/// shown for names that only ever appear as plain text - e.g. a chat log
+/// line, which has no UUID attached the way an online-players response
+/// does. Shares `AppState.uuid_cache` with `list_online_players`, so a name
+/// already resolved there (or here) isn't looked up twice. `None` (rather
+/// than an error) for a name that doesn't resolve, e.g. an offline-mode
+/// account or a typo - `PlayerAvatar` already degrades to a plain initial
+/// when it can't resolve a skin for whatever id it's given.
+#[tauri::command]
+pub async fn lookup_player_uuid(state: State<'_, AppState>, username: String) -> Result<Option<String>, String> {
+    if let Some(cached) = state.uuid_cache.lock().await.get(&username).cloned() {
+        return Ok(Some(cached));
+    }
+    match crate::minecraft::server_admin::lookup_uuid(&state.http, &username).await {
+        Ok((uuid, _)) => {
+            state.uuid_cache.lock().await.insert(username, uuid.clone());
+            Ok(Some(uuid))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 /// Saves (or updates) a Microsoft account's refresh token after a
 /// successful login/refresh, if one was issued. Microsoft may omit a fresh
 /// refresh token from a `grant_type=refresh_token` response, in which case

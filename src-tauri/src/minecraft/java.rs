@@ -51,7 +51,17 @@ fn system_launch_command() -> &'static str {
 /// goes through the plain `java` binary even though launching prefers
 /// `javaw` (no console flash) where available.
 async fn system_java_matches(required_major: u32) -> bool {
-    let Ok(output) = tokio::process::Command::new("java").arg("-version").output().await else {
+    let mut cmd = tokio::process::Command::new("java");
+    cmd.arg("-version");
+    // Without this, spawning the console-mode `java` binary from a windowed
+    // (non-console) app briefly flashes a cmd window - see `pid_is_alive` in
+    // state.rs for the same fix on a call that runs far more often.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let Ok(output) = cmd.output().await else {
         return false;
     };
     let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));

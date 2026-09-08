@@ -563,8 +563,11 @@ fn kill_process(pid: u32) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn kill_process(pid: u32) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/F", "/T"])
+        .creation_flags(CREATE_NO_WINDOW)
         .status()?;
     Ok(())
 }

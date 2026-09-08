@@ -162,11 +162,15 @@ Remove-Item -Force -LiteralPath $PSCommandPath
     );
     std::fs::write(&script_path, script).map_err(|e| e.to_string())?;
 
-    std::process::Command::new("powershell")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script_path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script_path)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW - belt-and-suspenders with -WindowStyle Hidden above
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
 
     app.exit(0);
     Ok(())
