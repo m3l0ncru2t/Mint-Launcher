@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { BrowseModsDialog } from "./BrowseModsDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -68,6 +69,11 @@ export function ModsPanel({ instanceId }: Props) {
     api
       .checkModUpdates(instanceId)
       .then((list) => {
+        // The `mod-update-checked` listener below has typically already
+        // filled `updates` in with every one of these by the time this
+        // resolves - this just re-asserts the complete, authoritative set,
+        // a no-op in practice but a safety net for anything a listener
+        // missed (e.g. one that (re)subscribed slightly late).
         const byFile: Record<string, ModUpdateInfo> = {};
         for (const info of list) byFile[info.fileName] = info;
         setUpdates(byFile);
@@ -83,6 +89,16 @@ export function ModsPanel({ instanceId }: Props) {
     load(true, true);
     const onFocus = () => load(false, false);
     window.addEventListener("focus", onFocus);
+    // Backend checks every mod concurrently and emits one of these as each
+    // finishes (see `commands::instances::check_mod_updates`), rather than
+    // going quiet until every last one is done - lets a big modpack's
+    // update badges/icons fill in one by one instead of all appearing at
+    // once after a long wait.
+    const unlistenChecked = listen<{ instanceId: string; info: ModUpdateInfo }>("mod-update-checked", (event) => {
+      if (event.payload.instanceId !== instanceId) return;
+      const info = event.payload.info;
+      setUpdates((prev) => ({ ...prev, [info.fileName]: info }));
+    });
     // A remote admin (see RemoteModsTab) can upload/delete/toggle mods on
     // this same instance from another machine entirely - nothing here would
     // otherwise notice until the window happened to regain focus, so this
@@ -93,6 +109,7 @@ export function ModsPanel({ instanceId }: Props) {
     return () => {
       window.removeEventListener("focus", onFocus);
       clearInterval(interval);
+      unlistenChecked.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
@@ -190,7 +207,7 @@ export function ModsPanel({ instanceId }: Props) {
         {update?.iconUrl ? (
           <img src={update.iconUrl} className="mod-row-icon" alt="" />
         ) : (
-          <div className="mod-row-icon placeholder-icon" />
+          <div className="mod-row-icon placeholder-icon">{(update?.title ?? m.fileName).slice(0, 1).toUpperCase()}</div>
         )}
         <div className="mod-name-block">
           <span className="mod-name">{update?.title ?? m.fileName}</span>

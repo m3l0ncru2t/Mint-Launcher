@@ -60,7 +60,9 @@ export function ResourcePackInfoDialog({ instanceId, fileName, enabled, onClose 
               {details.iconUrl ? (
                 <img src={details.iconUrl} className="mod-info-icon" alt="" />
               ) : (
-                <div className="mod-info-icon placeholder-icon" />
+                <div className="mod-info-icon placeholder-icon">
+                  {(details.title ?? details.fileName).slice(0, 1).toUpperCase()}
+                </div>
               )}
               <div>
                 <h3>{details.title}</h3>

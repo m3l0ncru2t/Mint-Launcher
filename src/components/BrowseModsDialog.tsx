@@ -114,7 +114,7 @@ export function BrowseModsDialog({ instanceId, onClose, onInstalled }: Props) {
                   {r.iconUrl ? (
                     <img src={r.iconUrl} className="mod-search-icon" alt="" />
                   ) : (
-                    <div className="mod-search-icon placeholder-icon" />
+                    <div className="mod-search-icon placeholder-icon">{r.title.slice(0, 1).toUpperCase()}</div>
                   )}
                   <div className="mod-search-info">
                     <div className="mod-search-title">{r.title}</div>

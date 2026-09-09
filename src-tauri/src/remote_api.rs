@@ -384,7 +384,7 @@ async fn mod_updates(
     require_session(&app, &headers).await?;
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
-    commands::instances::check_mod_updates(state, id)
+    commands::instances::check_mod_updates(app.clone(), state, id)
         .await
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
@@ -525,7 +525,7 @@ async fn resourcepack_updates(
     require_session(&app, &headers).await?;
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
-    commands::instances::check_resourcepack_updates(state, id)
+    commands::instances::check_resourcepack_updates(app.clone(), state, id)
         .await
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))

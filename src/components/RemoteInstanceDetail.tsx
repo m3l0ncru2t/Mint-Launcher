@@ -557,7 +557,9 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
                 {update?.iconUrl ? (
                   <img src={update.iconUrl} className="mod-row-icon" alt="" />
                 ) : (
-                  <div className="mod-row-icon placeholder-icon" />
+                  <div className="mod-row-icon placeholder-icon">
+                    {(update?.title ?? m.fileName).slice(0, 1).toUpperCase()}
+                  </div>
                 )}
                 <div className="mod-name-block">
                   <span className="mod-name">{update?.title ?? m.fileName}</span>
@@ -745,7 +747,9 @@ function RemoteResourcePacksTab({
                 {update?.iconUrl ? (
                   <img src={update.iconUrl} className="mod-row-icon" alt="" />
                 ) : (
-                  <div className="mod-row-icon placeholder-icon" />
+                  <div className="mod-row-icon placeholder-icon">
+                    {(update?.title ?? p.fileName).slice(0, 1).toUpperCase()}
+                  </div>
                 )}
                 <div className="mod-name-block">
                   <span className="mod-name">{update?.title ?? p.fileName}</span>

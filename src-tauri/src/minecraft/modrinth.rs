@@ -136,10 +136,16 @@ pub async fn check_updates(
     mods_dir: &Path,
     game_version: &str,
     loader: Option<&str>,
+    on_result: impl FnMut(&ModUpdateInfo),
 ) -> anyhow::Result<Vec<ModUpdateInfo>> {
-    check_updates_matching(client, mods_dir, game_version, loader, |lower| {
-        lower.ends_with(".jar") || lower.ends_with(".jar.disabled")
-    })
+    check_updates_matching(
+        client,
+        mods_dir,
+        game_version,
+        loader,
+        |lower| lower.ends_with(".jar") || lower.ends_with(".jar.disabled"),
+        on_result,
+    )
     .await
 }
 
@@ -150,16 +156,29 @@ pub async fn check_resourcepack_updates(
     client: &reqwest::Client,
     resourcepacks_dir: &Path,
     game_version: &str,
+    on_result: impl FnMut(&ModUpdateInfo),
 ) -> anyhow::Result<Vec<ModUpdateInfo>> {
-    check_updates_matching(client, resourcepacks_dir, game_version, None, |lower| lower.ends_with(".zip")).await
+    check_updates_matching(client, resourcepacks_dir, game_version, None, |lower| lower.ends_with(".zip"), on_result)
+        .await
 }
 
+/// `on_result` fires once per file as its check actually finishes - each one
+/// needs its own couple of Modrinth round trips (latest-version lookup, then
+/// project info for the title/icon, sequentially per file previously), so a
+/// modpack with 50+ mods took a long time and showed nothing until every
+/// last one was done. Running them concurrently (one task per file, both via
+/// `JoinSet`) and reporting each as it completes - not in original order,
+/// whichever finishes first - fixes both: a big pack's total check time is
+/// now bound by the slowest single lookup rather than the sum of all of
+/// them, and the caller can show results appearing one by one instead of a
+/// long wait followed by everything at once.
 async fn check_updates_matching(
     client: &reqwest::Client,
     dir: &Path,
     game_version: &str,
     loader: Option<&str>,
     matches: impl Fn(&str) -> bool,
+    mut on_result: impl FnMut(&ModUpdateInfo),
 ) -> anyhow::Result<Vec<ModUpdateInfo>> {
     let mut hash_to_file: HashMap<String, String> = HashMap::new();
     if dir.exists() {
@@ -192,49 +211,13 @@ async fn check_updates_matching(
     let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
 
     let mut results = Vec::new();
-    let mut identified: HashSet<String> = HashSet::new();
 
-    for (hash, current) in &matched {
-        let Some(file_name) = hash_to_file.get(hash) else {
-            continue;
-        };
-        identified.insert(file_name.clone());
-
-        let latest = fetch_latest_compatible(client, &current.project_id, game_version, loader)
-            .await
-            .unwrap_or(None);
-
-        let update_available = latest.as_ref().is_some_and(|l| l.id != current.id);
-        let download_url = latest
-            .as_ref()
-            .filter(|_| update_available)
-            .and_then(|l| l.files.iter().find(|f| f.primary).or(l.files.first()))
-            .map(|f| f.url.clone());
-
-        let mut project_info = fetch_project_info(client, &current.project_id).await.ok();
-        if project_info.is_none() {
-            // A single Modrinth request occasionally times out or hiccups -
-            // retry once rather than permanently showing a blank icon/title.
-            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-            project_info = fetch_project_info(client, &current.project_id).await.ok();
-        }
-
-        results.push(ModUpdateInfo {
-            file_name: file_name.clone(),
-            project_id: Some(current.project_id.clone()),
-            title: project_info.as_ref().map(|p| p.title.clone()),
-            icon_url: project_info.and_then(|p| p.icon_url),
-            current_version: Some(current.version_number.clone()),
-            latest_version: latest.map(|l| l.version_number),
-            update_available,
-            download_url,
-        });
-    }
-
-    for file_name in hash_to_file.into_values() {
-        if !identified.contains(&file_name) {
-            results.push(ModUpdateInfo {
-                file_name,
+    // Files Modrinth doesn't recognize at all need no network round trip -
+    // report those immediately rather than waiting on the ones that do.
+    for (hash, file_name) in &hash_to_file {
+        if !matched.contains_key(hash) {
+            let info = ModUpdateInfo {
+                file_name: file_name.clone(),
                 project_id: None,
                 title: None,
                 icon_url: None,
@@ -242,7 +225,66 @@ async fn check_updates_matching(
                 latest_version: None,
                 update_available: false,
                 download_url: None,
-            });
+            };
+            on_result(&info);
+            results.push(info);
+        }
+    }
+
+    // Capped rather than fully unbounded - a large pack can easily have 100+
+    // mods, and firing that many requests at Modrinth in the same instant
+    // risks tripping its rate limit and turning a slow-but-reliable check
+    // into a fast-but-flaky one. 8 at a time is still a big win over the
+    // previous one-at-a-time loop.
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let mut join_set = tokio::task::JoinSet::new();
+    for (hash, current) in matched {
+        let Some(file_name) = hash_to_file.get(&hash) else {
+            continue;
+        };
+        let file_name = file_name.clone();
+        let client = client.clone();
+        let game_version = game_version.to_string();
+        let loader = loader.map(str::to_string);
+        let semaphore = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.ok();
+            let latest = fetch_latest_compatible(&client, &current.project_id, &game_version, loader.as_deref())
+                .await
+                .unwrap_or(None);
+
+            let update_available = latest.as_ref().is_some_and(|l| l.id != current.id);
+            let download_url = latest
+                .as_ref()
+                .filter(|_| update_available)
+                .and_then(|l| l.files.iter().find(|f| f.primary).or(l.files.first()))
+                .map(|f| f.url.clone());
+
+            let mut project_info = fetch_project_info(&client, &current.project_id).await.ok();
+            if project_info.is_none() {
+                // A single Modrinth request occasionally times out or hiccups -
+                // retry once rather than permanently showing a blank icon/title.
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                project_info = fetch_project_info(&client, &current.project_id).await.ok();
+            }
+
+            ModUpdateInfo {
+                file_name,
+                project_id: Some(current.project_id.clone()),
+                title: project_info.as_ref().map(|p| p.title.clone()),
+                icon_url: project_info.and_then(|p| p.icon_url),
+                current_version: Some(current.version_number.clone()),
+                latest_version: latest.map(|l| l.version_number),
+                update_available,
+                download_url,
+            }
+        });
+    }
+
+    while let Some(joined) = join_set.join_next().await {
+        if let Ok(info) = joined {
+            on_result(&info);
+            results.push(info);
         }
     }
 

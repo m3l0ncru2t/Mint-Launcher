@@ -5,7 +5,7 @@ use crate::state::AppState;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use std::io::Read;
-use tauri::State;
+use tauri::{Emitter, State};
 
 const MAX_ICON_BYTES: usize = 5 * 1024 * 1024;
 
@@ -590,8 +590,15 @@ pub fn open_folder(path: String) -> Result<(), String> {
     cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Emits `mod-update-checked` as each mod's check finishes (see
+/// `modrinth::check_updates_matching`'s `on_result`) so `ModsPanel` can show
+/// results appearing one by one instead of a long wait followed by all of
+/// them at once - still returns the complete list too, both as the return
+/// value every caller already expects and as a safety net for a listener
+/// that missed an event (e.g. one set up slightly after this started).
 #[tauri::command]
 pub async fn check_mod_updates(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<crate::minecraft::modrinth::ModUpdateInfo>, String> {
@@ -602,6 +609,9 @@ pub async fn check_mod_updates(
         &dir,
         &inst.version_id,
         inst.loader.modrinth_loader(),
+        |info| {
+            let _ = app.emit("mod-update-checked", serde_json::json!({ "instanceId": id, "info": info }));
+        },
     )
     .await
     .map_err(|e| e.to_string())
@@ -735,16 +745,21 @@ pub async fn get_resourcepack_info(
         .map_err(|e| e.to_string())
 }
 
+/// See `check_mod_updates` - same "emit as each one finishes, still return
+/// the full list too" shape, on its own event name.
 #[tauri::command]
 pub async fn check_resourcepack_updates(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Vec<crate::minecraft::modrinth::ModUpdateInfo>, String> {
     let inst = resolve_instance(&state, &id)?;
     let dir = inst.resourcepacks_dir(&state.instances_dir());
-    crate::minecraft::modrinth::check_resourcepack_updates(&state.http, &dir, &inst.version_id)
-        .await
-        .map_err(|e| e.to_string())
+    crate::minecraft::modrinth::check_resourcepack_updates(&state.http, &dir, &inst.version_id, |info| {
+        let _ = app.emit("resourcepack-update-checked", serde_json::json!({ "instanceId": id, "info": info }));
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

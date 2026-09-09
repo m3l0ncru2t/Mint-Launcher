@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { BrowseResourcePacksDialog } from "./BrowseResourcePacksDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -68,6 +69,9 @@ export function ResourcePacksPanel({ instanceId }: Props) {
     api
       .checkResourcepackUpdates(instanceId)
       .then((list) => {
+        // The `resourcepack-update-checked` listener below has typically
+        // already filled `updates` in with every one of these by the time
+        // this resolves - a safety net for anything a listener missed.
         const byFile: Record<string, ModUpdateInfo> = {};
         for (const info of list) byFile[info.fileName] = info;
         setUpdates(byFile);
@@ -83,7 +87,22 @@ export function ResourcePacksPanel({ instanceId }: Props) {
     load(true, true);
     const onFocus = () => load(false, false);
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    // Backend checks every pack concurrently and emits one of these as each
+    // finishes (see `commands::instances::check_resourcepack_updates`), so a
+    // big pack list's update badges/icons fill in one by one instead of all
+    // appearing at once after a long wait.
+    const unlistenChecked = listen<{ instanceId: string; info: ModUpdateInfo }>(
+      "resourcepack-update-checked",
+      (event) => {
+        if (event.payload.instanceId !== instanceId) return;
+        const info = event.payload.info;
+        setUpdates((prev) => ({ ...prev, [info.fileName]: info }));
+      },
+    );
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      unlistenChecked.then((f) => f());
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
 
@@ -187,7 +206,9 @@ export function ResourcePacksPanel({ instanceId }: Props) {
                 {update?.iconUrl ? (
                   <img src={update.iconUrl} className="mod-row-icon" alt="" />
                 ) : (
-                  <div className="mod-row-icon placeholder-icon" />
+                  <div className="mod-row-icon placeholder-icon">
+                    {(update?.title ?? p.fileName).slice(0, 1).toUpperCase()}
+                  </div>
                 )}
                 <div className="mod-name-block">
                   <span className="mod-name">{update?.title ?? p.fileName}</span>

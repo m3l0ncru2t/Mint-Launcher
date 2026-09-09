@@ -51,7 +51,7 @@ export function ResourcePackProjectInfoDialog({
           {result.iconUrl ? (
             <img src={result.iconUrl} className="mod-info-icon" alt="" />
           ) : (
-            <div className="mod-info-icon placeholder-icon" />
+            <div className="mod-info-icon placeholder-icon">{result.title.slice(0, 1).toUpperCase()}</div>
           )}
           <div>
             <h3>{result.title}</h3>
