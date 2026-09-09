@@ -85,7 +85,13 @@ export default function App() {
     const unlistenLog = listen<InstanceLogEvent>("instance-log", (event) => {
       setLogsByInstance((prev) => {
         const existing = prev[event.payload.instanceId] ?? [];
-        return { ...prev, [event.payload.instanceId]: [...existing, event.payload.line] };
+        // Unbounded before this cap - a server left running for hours would
+        // pile up tens of thousands of lines here, and every console/chat
+        // re-render re-joins and re-parses the *entire* array (see
+        // ServerConsolePanel/ChatPanel), so the GUI got measurably slower
+        // the longer an instance stayed open. The full history is still on
+        // disk and available via the Logs tab; this is just the live buffer.
+        return { ...prev, [event.payload.instanceId]: [...existing, event.payload.line].slice(-5000) };
       });
     });
     // Fired whenever a launch actually starts/stops a game process - kept

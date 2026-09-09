@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseChatLines } from "../chatParser";
 import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
 import { RemoteBrowseModsDialog } from "./RemoteBrowseModsDialog";
 import { RemoteBrowseResourcePacksDialog } from "./RemoteBrowseResourcePacksDialog";
@@ -52,6 +53,7 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
   } | null>(null);
   const [actionBusy, setActionBusy] = useState<"start" | "stop" | "restart" | "kill" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"restart" | "stop" | "kill" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,13 +179,13 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
           </button>
           {running ? (
             <>
-              <button className="restart-btn" onClick={() => runAction("restart")} disabled={!!actionBusy}>
+              <button className="restart-btn" onClick={() => setConfirmAction("restart")} disabled={!!actionBusy}>
                 {actionBusy === "restart" ? "Restarting…" : "Restart"}
               </button>
-              <button className="stop-btn" onClick={() => runAction("stop")} disabled={!!actionBusy}>
+              <button className="stop-btn" onClick={() => setConfirmAction("stop")} disabled={!!actionBusy}>
                 {actionBusy === "stop" ? "Stopping…" : "Stop"}
               </button>
-              <button className="danger-btn" onClick={() => runAction("kill")} disabled={!!actionBusy}>
+              <button className="danger-btn" onClick={() => setConfirmAction("kill")} disabled={!!actionBusy}>
                 {actionBusy === "kill" ? "Killing…" : "Kill"}
               </button>
             </>
@@ -361,6 +363,29 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
           )}
         </div>
       </div>
+
+      {confirmAction && (
+        <ConfirmDialog
+          title={
+            confirmAction === "restart" ? "Restart server?" : confirmAction === "stop" ? "Stop server?" : "Kill server?"
+          }
+          message={
+            confirmAction === "restart"
+              ? "Players get a 60/30/10/5-second warning in-game before it actually restarts."
+              : confirmAction === "stop"
+                ? "Connected players will be disconnected while it shuts down gracefully."
+                : "This force-kills the process immediately - connected players are disconnected with no warning, and any progress since the last autosave could be lost."
+          }
+          confirmLabel={confirmAction === "restart" ? "Restart" : confirmAction === "stop" ? "Stop" : "Kill"}
+          danger={confirmAction !== "restart"}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            runAction(action);
+          }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
     </div>
   );
 }
@@ -382,17 +407,19 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
   const [showBrowse, setShowBrowse] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function load() {
-    setLoading(true);
+  function load(showLoading = true, thenCheckUpdates = true) {
+    if (showLoading) setLoading(true);
     api
       .listMods()
       .then((list) => {
         setMods(list);
         setError(null);
-        checkUpdates();
+        if (thenCheckUpdates) checkUpdates();
       })
       .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (showLoading) setLoading(false);
+      });
   }
 
   function checkUpdates() {
@@ -410,7 +437,17 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
       .finally(() => setCheckingUpdates(false));
   }
 
-  useEffect(load, [link.id]);
+  useEffect(() => {
+    load();
+    // Another admin connected to this same shared instance (or the host's
+    // own local Mods tab) can upload/delete/toggle mods at any moment -
+    // without this, this view would only notice on its own next manual
+    // action. Quiet (no spinner, no Modrinth re-check) since it's just
+    // keeping the list itself in sync.
+    const interval = setInterval(() => load(false, false), 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.id]);
 
   async function handleUpload(file: File) {
     setUploading(true);
@@ -478,7 +515,7 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
           <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
             Browse Mods
           </button>
-          <button className="ghost-btn small" onClick={load}>
+          <button className="ghost-btn small" onClick={() => load()}>
             Refresh
           </button>
           <button className="ghost-btn small" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
@@ -753,6 +790,7 @@ function RemoteConsoleTab({
   const api = remoteApi(link, onTokenRefreshed);
   const [lines, setLines] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  const [autoFollow, setAutoFollow] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -765,8 +803,8 @@ function RemoteConsoleTab({
   }, [link.id]);
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [lines]);
+    if (autoFollow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [lines, autoFollow]);
 
   async function handleCopy() {
     await navigator.clipboard.writeText(lines.join("\n"));
@@ -779,6 +817,13 @@ function RemoteConsoleTab({
       <div className="panel-header">
         <h4>Console</h4>
         <div className="panel-actions">
+          <button
+            className={`ghost-btn small${autoFollow ? " selected" : ""}`}
+            onClick={() => setAutoFollow((f) => !f)}
+            title={autoFollow ? "New output keeps scrolling this into view" : "Scrolling stays put as new output arrives"}
+          >
+            Auto-follow
+          </button>
           <button className="ghost-btn small" onClick={handleCopy} disabled={lines.length === 0}>
             {copied ? "Copied!" : "Copy"}
           </button>
@@ -806,6 +851,8 @@ function RemoteChatTab({
 }) {
   const api = remoteApi(link, onTokenRefreshed);
   const [lines, setLines] = useState<string[]>([]);
+  const [autoFollow, setAutoFollow] = useState(true);
+  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return streamConsoleTailThenLive(
@@ -816,15 +863,30 @@ function RemoteChatTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
-  const entries = parseChatLines(lines.join("\n"));
+  // Memoized so the status/stats polling elsewhere on this page (every few
+  // seconds) doesn't re-parse the whole buffer on every tick it isn't
+  // actually the one changing.
+  const entries = useMemo(() => parseChatLines(lines.join("\n")), [lines]);
+
+  useEffect(() => {
+    if (autoFollow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [entries.length, autoFollow]);
 
   return (
     <>
       <div className="panel-header">
         <h4>Chat</h4>
+        <div className="panel-actions">
+          <button
+            className={`ghost-btn small${autoFollow ? " selected" : ""}`}
+            onClick={() => setAutoFollow((f) => !f)}
+            title={autoFollow ? "New messages keep scrolling this into view" : "Scrolling stays put as new messages arrive"}
+          >
+            Auto-follow
+          </button>
+        </div>
       </div>
-      {/* Deliberately not auto-scrolled - see the local ChatPanel for why. */}
-      <div className="log-console chat-console">
+      <div className="log-console chat-console" ref={logRef}>
         {entries.length === 0 ? (
           <span className="placeholder">
             Chat, joins/leaves, and private messages will appear here once the server's running.

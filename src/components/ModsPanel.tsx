@@ -83,7 +83,17 @@ export function ModsPanel({ instanceId }: Props) {
     load(true, true);
     const onFocus = () => load(false, false);
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    // A remote admin (see RemoteModsTab) can upload/delete/toggle mods on
+    // this same instance from another machine entirely - nothing here would
+    // otherwise notice until the window happened to regain focus, so this
+    // instance's own mod list could sit stale indefinitely while it's the
+    // one actually being looked at. Quiet (no spinner, no Modrinth re-check)
+    // since it's just keeping the list itself in sync, not a user action.
+    const interval = setInterval(() => load(false, false), 5000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearInterval(interval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
 

@@ -108,11 +108,17 @@ async fn broadcast_restart_countdown(state: &AppState, instance_id: &str) {
         .ok()
         .flatten()
         .map(|inst| inst.game_dir(&state.instances_dir()));
-    const STEPS: [(u64, u64); 4] = [(60, 30), (30, 20), (10, 5), (5, 5)];
-    for (seconds, wait_after) in STEPS {
+    // The last step announces the restart itself rather than "in 5 seconds"
+    // - by the time anyone reads it, it's already happening.
+    const STEPS: [(&str, u64); 4] = [
+        ("Server restarting in 60 seconds", 30),
+        ("Server restarting in 30 seconds", 20),
+        ("Server restarting in 10 seconds", 5),
+        ("Server restarting", 5),
+    ];
+    for (message, wait_after) in STEPS {
         if let Some(game_dir) = &game_dir {
-            let message = format!("say Server restarting in {seconds} seconds");
-            let _ = write_console_line(state, game_dir, instance_id, &message).await;
+            let _ = write_console_line(state, game_dir, instance_id, &format!("say {message}")).await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(wait_after)).await;
     }

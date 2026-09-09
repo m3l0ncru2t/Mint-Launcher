@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 
 interface Props {
@@ -27,6 +27,7 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   const [command, setCommand] = useState("");
   const [sendingCommand, setSendingCommand] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoFollow, setAutoFollow] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
 
   // A "This instance isn't a running server" error from before a Stop/Start
@@ -46,7 +47,16 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   // show instead of a permanently blank console.
   const hasLiveLines = logLines.length > 0;
   const [fallbackContent, setFallbackContent] = useState("");
-  const displayText = hasLiveLines ? stripMintPolling(logLines.join("\n")) : stripMintPolling(fallbackContent);
+  // Without this memo, every unrelated re-render (TPS/stats/player-count
+  // polling in InstanceDetail fires every few seconds) re-joined and
+  // re-filtered the *entire* console text again, even though nothing here
+  // had changed - increasingly expensive the longer a busy server ran and
+  // the more it had logged. Only actually recompute when the text itself
+  // (a new line, or a fresh fallback poll) changes.
+  const displayText = useMemo(
+    () => (hasLiveLines ? stripMintPolling(logLines.join("\n")) : stripMintPolling(fallbackContent)),
+    [hasLiveLines, logLines, fallbackContent],
+  );
 
   useEffect(() => {
     if (hasLiveLines || !isRunning) {
@@ -68,11 +78,14 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
     };
   }, [instanceId, isRunning, hasLiveLines]);
 
+  // Only snaps to the bottom while auto-follow is on - otherwise scrolling
+  // up to read past output would keep getting yanked back down by the next
+  // line. Also re-snaps immediately when the button turns it back on.
   useEffect(() => {
-    if (logRef.current) {
+    if (autoFollow && logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [logLines, fallbackContent]);
+  }, [logLines, fallbackContent, autoFollow]);
 
   async function handleCopy() {
     await navigator.clipboard.writeText(displayText);
@@ -99,6 +112,13 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
       <div className="panel-header">
         <h4>Console</h4>
         <div className="panel-actions">
+          <button
+            className={`ghost-btn small${autoFollow ? " selected" : ""}`}
+            onClick={() => setAutoFollow((f) => !f)}
+            title={autoFollow ? "New output keeps scrolling this into view" : "Scrolling stays put as new output arrives"}
+          >
+            Auto-follow
+          </button>
           <button className="ghost-btn small" onClick={handleCopy} disabled={!displayText}>
             {copied ? "Copied!" : "Copy"}
           </button>

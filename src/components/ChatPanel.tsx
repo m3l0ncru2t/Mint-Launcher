@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { parseChatLines, type ChatEntry } from "../chatParser";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -18,6 +18,8 @@ interface Props {
 export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
   const hasLiveLines = logLines.length > 0;
   const [fallbackContent, setFallbackContent] = useState("");
+  const [autoFollow, setAutoFollow] = useState(true);
+  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (hasLiveLines || !isRunning) {
@@ -39,18 +41,40 @@ export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
     };
   }, [instanceId, isRunning, hasLiveLines]);
 
-  const entries = parseChatLines(hasLiveLines ? logLines.join("\n") : fallbackContent);
+  // Memoized for the same reason ServerConsolePanel memoizes its own
+  // displayText - re-parsing the whole growing log on every unrelated
+  // re-render (TPS/stats polling elsewhere) got more expensive the longer a
+  // server had been logging.
+  const entries = useMemo(
+    () => parseChatLines(hasLiveLines ? logLines.join("\n") : fallbackContent),
+    [hasLiveLines, logLines, fallbackContent],
+  );
+
+  // Off by default would mean chat you're actively reading keeps getting
+  // yanked to the bottom on every new message; on by default (with a button
+  // to turn it off) lets you scroll back through history without a fight,
+  // while still following along by default like a normal chat window.
+  useEffect(() => {
+    if (autoFollow && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [entries.length, autoFollow]);
 
   return (
     <>
       <div className="panel-header">
         <h4>Chat</h4>
+        <div className="panel-actions">
+          <button
+            className={`ghost-btn small${autoFollow ? " selected" : ""}`}
+            onClick={() => setAutoFollow((f) => !f)}
+            title={autoFollow ? "New messages keep scrolling this into view" : "Scrolling stays put as new messages arrive"}
+          >
+            Auto-follow
+          </button>
+        </div>
       </div>
-      {/* Deliberately not auto-scrolled - unlike the raw console, chat is
-          something you might scroll back through while it keeps growing,
-          and having it yank back to the bottom on every new message makes
-          that impossible. */}
-      <div className="log-console chat-console">
+      <div className="log-console chat-console" ref={logRef}>
         {entries.length === 0 ? (
           <span className="placeholder">
             Chat, joins/leaves, and private messages will appear here once the server's running.

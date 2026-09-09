@@ -25,8 +25,17 @@ async fn write_packet(stream: &mut TcpStream, id: i32, packet_type: i32, body: &
     payload.extend_from_slice(body.as_bytes());
     payload.push(0); // null-terminates the body string
     payload.push(0); // empty second string, also null-terminated
-    stream.write_all(&(payload.len() as i32).to_le_bytes()).await?;
-    stream.write_all(&payload).await
+    // Vanilla's RCON reader is sensitive to the length prefix and the rest
+    // of the packet arriving as two separate writes (confirmed against a
+    // real server: the auth packet - the very first thing written on a
+    // fresh connection - went through fine either way, but the very next
+    // packet on that same connection reliably got the server to silently
+    // close it, "early eof" on our next read). Sending it all as one
+    // `write_all` call avoids that entirely.
+    let mut packet = Vec::with_capacity(payload.len() + 4);
+    packet.extend_from_slice(&(payload.len() as i32).to_le_bytes());
+    packet.extend_from_slice(&payload);
+    stream.write_all(&packet).await
 }
 
 /// Reads one packet and returns (id, body) - the type field isn't needed by

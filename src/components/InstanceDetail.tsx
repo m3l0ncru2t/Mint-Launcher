@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { InstanceFilesPanel } from "./InstanceFilesPanel";
 import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
@@ -75,6 +76,7 @@ export function InstanceDetail({
   const [exportError, setExportError] = useState<string | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"restart" | "stop" | "kill" | null>(null);
   const [showConsole, setShowConsole] = useState(false);
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
@@ -294,6 +296,18 @@ export function InstanceDetail({
     }
   }
 
+  // Restart/Stop/Kill all disrupt anyone currently connected (Kill with no
+  // warning at all) - routed through a confirmation dialog instead of
+  // running straight off the button click, since one misclick shouldn't be
+  // able to knock everyone off a live server.
+  function runConfirmedAction() {
+    const action = confirmAction;
+    setConfirmAction(null);
+    if (action === "restart") handleRestart();
+    else if (action === "stop") handleStop();
+    else if (action === "kill") handleKill();
+  }
+
   async function handleCopyConsole() {
     await navigator.clipboard.writeText(logLines.join("\n"));
     setCopied(true);
@@ -350,13 +364,13 @@ export function InstanceDetail({
           {isServer ? (
             isRunning ? (
               <>
-                <button className="restart-btn" onClick={handleRestart} disabled={restarting}>
+                <button className="restart-btn" onClick={() => setConfirmAction("restart")} disabled={restarting}>
                   {restarting ? "Restarting…" : "Restart"}
                 </button>
-                <button className="stop-btn" onClick={handleStop}>
+                <button className="stop-btn" onClick={() => setConfirmAction("stop")}>
                   Stop
                 </button>
-                <button className="danger-btn" onClick={handleKill}>
+                <button className="danger-btn" onClick={() => setConfirmAction("kill")}>
                   Kill
                 </button>
               </>
@@ -592,6 +606,25 @@ export function InstanceDetail({
             setShowServers(false);
             handlePlay(address);
           }}
+        />
+      )}
+
+      {confirmAction && (
+        <ConfirmDialog
+          title={
+            confirmAction === "restart" ? "Restart server?" : confirmAction === "stop" ? "Stop server?" : "Kill server?"
+          }
+          message={
+            confirmAction === "restart"
+              ? "Players get a 60/30/10/5-second warning in-game before it actually restarts."
+              : confirmAction === "stop"
+                ? "Connected players will be disconnected while it shuts down gracefully."
+                : "This force-kills the process immediately - connected players are disconnected with no warning, and any progress since the last autosave could be lost."
+          }
+          confirmLabel={confirmAction === "restart" ? "Restart" : confirmAction === "stop" ? "Stop" : "Kill"}
+          danger={confirmAction !== "restart"}
+          onConfirm={runConfirmedAction}
+          onCancel={() => setConfirmAction(null)}
         />
       )}
     </div>

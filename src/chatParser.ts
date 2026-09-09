@@ -18,38 +18,54 @@ export interface ChatEntry {
   player?: string;
   target?: string;
   message?: string;
+  /** Seconds since midnight, from the log4j timestamp - used only to dedupe
+   * near-simultaneous repeats (see `parseChatLines`); not rendered. */
+  seconds?: number;
 }
 
-// "[13:14:15] [Server thread/INFO]: " - strips the log4j prefix so the
-// patterns below only need to match the actual message content.
-const LOG_PREFIX = /^\[\d{1,2}:\d{2}:\d{2}\]\s*\[[^\]]*\]:\s*/;
+// "[13:14:15] [Server thread/INFO]: " - captured (not just stripped) so
+// parseChatLines can dedupe by how close together two identical lines are.
+const LOG_PREFIX = /^\[(\d{1,2}):(\d{2}):(\d{2})\]\s*\[[^\]]*\]:\s*/;
 
 export function parseChatLine(rawLine: string): ChatEntry | null {
+  const prefixMatch = rawLine.match(LOG_PREFIX);
+  const seconds = prefixMatch
+    ? Number(prefixMatch[1]) * 3600 + Number(prefixMatch[2]) * 60 + Number(prefixMatch[3])
+    : undefined;
   const text = rawLine.replace(LOG_PREFIX, "").trim();
   if (!text) return null;
 
   let m = text.match(/^<(.+?)>\s?(.*)$/);
-  if (m) return { type: "chat", raw: rawLine, player: m[1], message: m[2] };
+  if (m) return { type: "chat", raw: rawLine, player: m[1], message: m[2], seconds };
 
   m = text.match(/^(.+?) joined the game$/);
-  if (m) return { type: "join", raw: rawLine, player: m[1] };
+  if (m) return { type: "join", raw: rawLine, player: m[1], seconds };
 
   m = text.match(/^(.+?) left the game$/);
-  if (m) return { type: "leave", raw: rawLine, player: m[1] };
+  if (m) return { type: "leave", raw: rawLine, player: m[1], seconds };
 
   // "[Steve -> Alex] hi" - a common shape for commands-mod whispers.
   m = text.match(/^\[(.+?)\s*(?:->|→)\s*(.+?)\]\s*(.*)$/);
-  if (m) return { type: "whisper", raw: rawLine, player: m[1], target: m[2], message: m[3] };
+  if (m) return { type: "whisper", raw: rawLine, player: m[1], target: m[2], message: m[3], seconds };
 
   // Vanilla's own "/msg" wording, both directions.
   m = text.match(/^(.+?) whispers? to you:\s*(.*)$/i);
-  if (m) return { type: "whisper", raw: rawLine, player: m[1], message: m[2] };
+  if (m) return { type: "whisper", raw: rawLine, player: m[1], message: m[2], seconds };
 
   m = text.match(/^You whisper to (.+?):\s*(.*)$/i);
-  if (m) return { type: "whisper", raw: rawLine, target: m[1], message: m[2] };
+  if (m) return { type: "whisper", raw: rawLine, target: m[1], message: m[2], seconds };
 
   return null;
 }
+
+// A Discord-bridge mod relaying a message back into chat (or a modpack's
+// log4j config double-appending every line on its own) tends to produce a
+// second, near-identical line within a couple of seconds - not necessarily
+// the very next line, since other players' chat can land in between. A
+// plain "is it the same as the line right before it" check (adjacent-only)
+// misses that; comparing against the last *kept* occurrence of the same
+// content within this window catches it regardless of what's interleaved.
+const DEDUPE_WINDOW_SECONDS = 4;
 
 export function parseChatLines(text: string): ChatEntry[] {
   const entries = text
@@ -57,21 +73,17 @@ export function parseChatLines(text: string): ChatEntry[] {
     .map(parseChatLine)
     .filter((entry): entry is ChatEntry => entry !== null);
 
-  // Some modpacks' log4j setups genuinely double-log every line (a second
-  // appender mirroring the first), and a remote connection's initial tail
-  // fetch racing its live WebSocket can very rarely redeliver a line the
-  // tail already covered (see RemoteChatTab/RemoteConsoleTab) - either way,
-  // the exact same chat/join/leave/whisper appearing twice in a row is
-  // effectively always one of these, not a player retyping the identical
-  // message a moment later, so collapse immediate repeats.
-  return entries.filter((entry, i) => {
-    const prev = entries[i - 1];
-    if (!prev) return true;
-    return !(
-      prev.type === entry.type &&
-      prev.player === entry.player &&
-      prev.target === entry.target &&
-      prev.message === entry.message
-    );
+  const lastKeptSeconds = new Map<string, number>();
+  return entries.filter((entry) => {
+    const key = `${entry.type}|${entry.player ?? ""}|${entry.target ?? ""}|${entry.message ?? ""}`;
+    const prev = lastKeptSeconds.get(key);
+    // No timestamp on either side (shouldn't normally happen) - can't judge
+    // proximity, so don't risk dropping a legitimate message.
+    const isDuplicate =
+      prev !== undefined && entry.seconds !== undefined && entry.seconds - prev >= 0 && entry.seconds - prev <= DEDUPE_WINDOW_SECONDS;
+    if (!isDuplicate) {
+      lastKeptSeconds.set(key, entry.seconds ?? prev ?? 0);
+    }
+    return !isDuplicate;
   });
 }
