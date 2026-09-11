@@ -136,7 +136,21 @@ pub async fn restart_instance(app: tauri::AppHandle, state: State<'_, AppState>,
         broadcast_restart_countdown(&state, &instance_id).await;
         let _ = stop_instance(app.clone(), app.state::<AppState>(), instance_id.clone()).await;
     }
-    launch_instance(app.clone(), app.state::<AppState>(), instance_id, None).await?;
+    // `launch_instance`'s own future doesn't resolve until the process it
+    // starts *exits* (it returns that exit code) - the local Start button
+    // gets away with awaiting it directly because the UI stops treating
+    // itself as "busy" the moment the earlier `launch-progress: running`
+    // event fires, not when this call actually returns. Restart has no such
+    // event to key off, so awaiting this directly kept its button reading
+    // "Restarting…" for as long as the *next* run of the server lasted -
+    // spawning it instead lets this command (and the remote `/restart`
+    // response, and the button's busy state) resolve once the relaunch has
+    // been kicked off, matching what "restarted" actually means here.
+    let app2 = app.clone();
+    let instance_id2 = instance_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = launch_instance(app2.clone(), app2.state::<AppState>(), instance_id2, None).await;
+    });
     Ok(())
 }
 

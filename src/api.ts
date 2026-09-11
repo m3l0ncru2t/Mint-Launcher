@@ -178,6 +178,9 @@ export const api = {
   upgradeInstanceLoader: (id: string, loader: ModLoader, loaderVersion: string) =>
     invoke<Instance>("upgrade_instance_loader", { id, loader, loaderVersion }),
 
+  updateFabricLoaderVersion: (id: string, loaderVersion: string) =>
+    invoke<Instance>("update_fabric_loader_version", { id, loaderVersion }),
+
   updateInstanceVersion: (id: string, versionId: string) =>
     invoke<Instance>("update_instance_version", { id, versionId }),
 

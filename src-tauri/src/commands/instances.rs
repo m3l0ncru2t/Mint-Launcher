@@ -297,6 +297,23 @@ pub fn upgrade_instance_loader(
     Ok(inst)
 }
 
+/// For an instance already on Fabric - moves it to a different Fabric
+/// loader build (a newer one, typically, but nothing here actually
+/// enforces that) without touching the Minecraft version, mods, worlds, or
+/// config. Same lazy-resolution story as `upgrade_instance_loader`: nothing
+/// is downloaded here, the new loader's libraries/profile are simply
+/// re-resolved on the instance's next launch.
+#[tauri::command]
+pub fn update_fabric_loader_version(state: State<AppState>, id: String, loader_version: String) -> Result<Instance, String> {
+    let mut inst = resolve_instance(&state, &id)?;
+    if inst.loader != ModLoader::Fabric {
+        return Err("This instance isn't using Fabric".to_string());
+    }
+    inst.loader_version = Some(loader_version);
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
 /// Moves an instance to a newer Minecraft version without recreating it -
 /// mods, worlds, and config are untouched. Libraries and (for Fabric) the
 /// loader profile are simply re-resolved against the new version on the

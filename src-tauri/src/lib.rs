@@ -106,6 +106,7 @@ pub fn run() {
             commands::instances::ping_server,
             commands::instances::update_instance_settings,
             commands::instances::upgrade_instance_loader,
+            commands::instances::update_fabric_loader_version,
             commands::instances::update_instance_version,
             commands::instances::set_instance_icon,
             commands::instances::remove_instance_icon,

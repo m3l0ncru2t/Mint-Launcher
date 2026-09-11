@@ -49,6 +49,7 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
   const [loadingFabric, setLoadingFabric] = useState(false);
   const [showUnstableFabric, setShowUnstableFabric] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [updatingFabricLoader, setUpdatingFabricLoader] = useState(false);
 
   const [mcVersions, setMcVersions] = useState<VersionManifestEntry[]>([]);
   const [loadingMcVersions, setLoadingMcVersions] = useState(true);
@@ -134,8 +135,11 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
     }
   }
 
+  // Fetched for a Vanilla instance (to offer upgrading to Fabric) or a
+  // Fabric one (to offer updating to a newer loader build) - the same list,
+  // just used by two different sections below depending on which.
   useEffect(() => {
-    if (instance.loader !== "vanilla") return;
+    if (instance.loader !== "vanilla" && instance.loader !== "fabric") return;
     let cancelled = false;
     setLoadingFabric(true);
     api
@@ -173,6 +177,20 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
       setError(String(e));
     } finally {
       setUpgrading(false);
+    }
+  }
+
+  async function handleUpdateFabricLoader() {
+    if (!fabricVersion) return;
+    setUpdatingFabricLoader(true);
+    setError(null);
+    try {
+      const updated = await api.updateFabricLoaderVersion(instance.id, fabricVersion);
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setUpdatingFabricLoader(false);
     }
   }
 
@@ -551,6 +569,44 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
               disabled={upgrading || !fabricVersion}
             >
               {upgrading ? "Upgrading…" : "Upgrade to Fabric"}
+            </button>
+          </div>
+        )}
+
+        {instance.loader === "fabric" && (
+          <div className="form-field">
+            <label>Fabric loader</label>
+            <div className="hint">Currently on {instance.loaderVersion ?? "an unknown version"}.</div>
+            <Select
+              value={fabricVersion}
+              onChange={setFabricVersion}
+              disabled={loadingFabric || visibleFabricVersions.length === 0}
+              placeholder={loadingFabric ? "Loading…" : "No Fabric builds available"}
+              options={visibleFabricVersions.map((v) => ({
+                value: v.version,
+                label: v.stable ? v.version : `${v.version} (unstable)`,
+              }))}
+            />
+            <div className="hint">
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={showUnstableFabric}
+                  onChange={(e) => setShowUnstableFabric(e.target.checked)}
+                />
+                Show unstable builds
+              </label>
+            </div>
+            {!loadingFabric && fabricVersions.length === 0 && (
+              <div className="hint">No Fabric builds published for this Minecraft version.</div>
+            )}
+            <button
+              type="button"
+              className="ghost-btn small"
+              onClick={handleUpdateFabricLoader}
+              disabled={updatingFabricLoader || !fabricVersion || fabricVersion === instance.loaderVersion}
+            >
+              {updatingFabricLoader ? "Updating…" : "Update Fabric loader"}
             </button>
           </div>
         )}
