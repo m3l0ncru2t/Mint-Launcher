@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parseChatLines } from "../chatParser";
+import { useAutoFollow } from "../hooks/useAutoFollow";
 import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
@@ -154,6 +155,18 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
     }
   }
 
+  // Fired independently of the `runAction("restart")` call above, which
+  // stays pending (and `actionBusy` stays "restart") for the whole ~60s
+  // countdown - this is a separate request the host picks up mid-countdown
+  // to leave the server running instead of stopping it.
+  async function handleCancelRestart() {
+    try {
+      await api.cancelRestart();
+    } catch (e) {
+      setActionError(String(e));
+    }
+  }
+
   return (
     <div className="main-panel">
       <div className="instance-header">
@@ -182,6 +195,11 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
               <button className="restart-btn" onClick={() => setConfirmAction("restart")} disabled={!!actionBusy}>
                 {actionBusy === "restart" ? "Restarting…" : "Restart"}
               </button>
+              {actionBusy === "restart" && (
+                <button className="ghost-btn" onClick={handleCancelRestart}>
+                  Cancel restart
+                </button>
+              )}
               <button className="stop-btn" onClick={() => setConfirmAction("stop")} disabled={!!actionBusy}>
                 {actionBusy === "stop" ? "Stopping…" : "Stop"}
               </button>
@@ -794,8 +812,6 @@ function RemoteConsoleTab({
   const api = remoteApi(link, onTokenRefreshed);
   const [lines, setLines] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
-  const [autoFollow, setAutoFollow] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return streamConsoleTailThenLive(
@@ -806,9 +822,7 @@ function RemoteConsoleTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
-  useEffect(() => {
-    if (autoFollow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [lines, autoFollow]);
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(lines);
 
   async function handleCopy() {
     await navigator.clipboard.writeText(lines.join("\n"));
@@ -833,7 +847,7 @@ function RemoteConsoleTab({
           </button>
         </div>
       </div>
-      <div className="log-console" ref={logRef}>
+      <div className="log-console" ref={logRef} onScroll={onScroll}>
         {lines.length > 0 ? (
           lines.join("\n")
         ) : (
@@ -855,8 +869,6 @@ function RemoteChatTab({
 }) {
   const api = remoteApi(link, onTokenRefreshed);
   const [lines, setLines] = useState<string[]>([]);
-  const [autoFollow, setAutoFollow] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return streamConsoleTailThenLive(
@@ -872,9 +884,9 @@ function RemoteChatTab({
   // actually the one changing.
   const entries = useMemo(() => parseChatLines(lines.join("\n")), [lines]);
 
-  useEffect(() => {
-    if (autoFollow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [entries.length, autoFollow]);
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(entries.length);
+
+  const onModerate = (command: string) => api.sendCommand(command);
 
   return (
     <>
@@ -890,13 +902,13 @@ function RemoteChatTab({
           </button>
         </div>
       </div>
-      <div className="log-console chat-console" ref={logRef}>
+      <div className="log-console chat-console" ref={logRef} onScroll={onScroll}>
         {entries.length === 0 ? (
           <span className="placeholder">
             Chat, joins/leaves, and private messages will appear here once the server's running.
           </span>
         ) : (
-          entries.map((entry, i) => <ChatLine key={i} entry={entry} />)
+          entries.map((entry, i) => <ChatLine key={i} entry={entry} onModerate={onModerate} />)
         )}
       </div>
     </>

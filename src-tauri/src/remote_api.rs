@@ -62,6 +62,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/start", post(start))
         .route("/stop", post(stop))
         .route("/restart", post(restart))
+        .route("/restart/cancel", post(cancel_restart))
         .route("/kill", post(kill))
         .layer(CorsLayer::permissive())
         .with_state(app)
@@ -880,6 +881,16 @@ async fn restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Sta
     // in-game heads-up a local one does - this request simply stays open
     // for the ~60s countdown before responding.
     commands::launch::restart_instance(app.clone(), app.state::<AppState>(), id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cancel_restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::launch::cancel_restart(state, id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(StatusCode::NO_CONTENT)

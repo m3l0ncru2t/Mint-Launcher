@@ -114,11 +114,17 @@ pub async fn remove_cape(client: &reqwest::Client, access_token: &str) -> anyhow
 /// a plain initial-letter avatar in that case.
 pub async fn fetch_public_skin_url(client: &reqwest::Client, uuid: &str) -> Option<String> {
     let compact = uuid.replace('-', "");
-    let resp = client
-        .get(format!("https://sessionserver.mojang.com/session/minecraft/profile/{compact}"))
-        .send()
-        .await
-        .ok()?;
+    let url = format!("https://sessionserver.mojang.com/session/minecraft/profile/{compact}");
+    let mut resp = client.get(&url).send().await.ok()?;
+    // Same reasoning as `server_admin::lookup_uuid`'s retry: a burst of
+    // concurrent avatar fetches (a whole chat backlog's worth of distinct
+    // players resolving at once) can get some of them rate-limited by
+    // Mojang, which callers would otherwise cache as "this account has no
+    // skin" for the rest of the session.
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || resp.status().is_server_error() {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        resp = client.get(&url).send().await.ok()?;
+    }
     if !resp.status().is_success() {
         return None;
     }

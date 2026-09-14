@@ -288,6 +288,7 @@ export const api = {
   stopInstance: (instanceId: string) => invoke<void>("stop_instance", { instanceId }),
 
   restartInstance: (instanceId: string) => invoke<void>("restart_instance", { instanceId }),
+  cancelRestart: (instanceId: string) => invoke<boolean>("cancel_restart", { instanceId }),
 
   killInstance: (instanceId: string) => invoke<void>("kill_instance", { instanceId }),
 

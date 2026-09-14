@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { enqueueMojangLookup } from "../lib/mojangLookupQueue";
 
 interface Props {
   uuid: string;
@@ -30,14 +31,15 @@ export function PlayerAvatar({ uuid, username, className, size = 28 }: Props) {
     let cancelled = false;
 
     function fetchFresh() {
-      api
-        .getPlayerSkinUrl(uuid)
+      enqueueMojangLookup(() => api.getPlayerSkinUrl(uuid))
         .then((url) => {
           skinUrlCache.set(uuid, url);
           if (!cancelled) setSkinUrl(url);
         })
         .catch(() => {
-          skinUrlCache.set(uuid, null);
+          // Transport-level failure, not a resolved "no skin" (that comes
+          // back as `null` above) - left uncached so it's retried on the
+          // next mount rather than showing a plain initial forever.
         });
     }
 

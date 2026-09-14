@@ -42,6 +42,7 @@ interface Props {
   progress: LaunchProgressEvent | null;
   logLines: string[];
   pid: number | null;
+  restartCountdown: number | null;
   showConfigsLogsTabs: boolean;
   spaciousView: boolean;
   onDelete: (id: string) => void;
@@ -55,6 +56,7 @@ export function InstanceDetail({
   progress,
   logLines,
   pid,
+  restartCountdown,
   showConfigsLogsTabs,
   spaciousView,
   onDelete,
@@ -286,13 +288,22 @@ export function InstanceDetail({
     setStopError(null);
     setRestarting(true);
     try {
-      // Broadcasts the 60/30/10/5-second in-game warning itself before
-      // actually stopping and relaunching - see restart_instance.
+      // Broadcasts the 60/30/10-second in-game warning itself before
+      // actually stopping and relaunching - see restart_instance. Can be
+      // called off mid-countdown with handleCancelRestart below.
       await api.restartInstance(instance.id);
     } catch (e) {
       setStopError(String(e));
     } finally {
       setRestarting(false);
+    }
+  }
+
+  async function handleCancelRestart() {
+    try {
+      await api.cancelRestart(instance.id);
+    } catch (e) {
+      setStopError(String(e));
     }
   }
 
@@ -365,8 +376,13 @@ export function InstanceDetail({
             isRunning ? (
               <>
                 <button className="restart-btn" onClick={() => setConfirmAction("restart")} disabled={restarting}>
-                  {restarting ? "Restarting…" : "Restart"}
+                  {restartCountdown != null ? `Restarting in ${restartCountdown}s…` : restarting ? "Restarting…" : "Restart"}
                 </button>
+                {restartCountdown != null && (
+                  <button className="ghost-btn" onClick={handleCancelRestart}>
+                    Cancel restart
+                  </button>
+                )}
                 <button className="stop-btn" onClick={() => setConfirmAction("stop")}>
                   Stop
                 </button>

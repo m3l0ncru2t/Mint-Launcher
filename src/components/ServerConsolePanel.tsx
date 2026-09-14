@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { useAutoFollow } from "../hooks/useAutoFollow";
 
 interface Props {
   instanceId: string;
@@ -27,8 +28,6 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   const [command, setCommand] = useState("");
   const [sendingCommand, setSendingCommand] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoFollow, setAutoFollow] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   // A "This instance isn't a running server" error from before a Stop/Start
   // cycle would otherwise stick around forever - nothing previously cleared
@@ -80,12 +79,9 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
 
   // Only snaps to the bottom while auto-follow is on - otherwise scrolling
   // up to read past output would keep getting yanked back down by the next
-  // line. Also re-snaps immediately when the button turns it back on.
-  useEffect(() => {
-    if (autoFollow && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logLines, fallbackContent, autoFollow]);
+  // line. Turns itself off/on as the user scrolls away from/back to the
+  // bottom, same as a normal chat window - see useAutoFollow.
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(displayText);
 
   async function handleCopy() {
     await navigator.clipboard.writeText(displayText);
@@ -124,7 +120,7 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
           </button>
         </div>
       </div>
-      <div className="log-console" ref={logRef}>
+      <div className="log-console" ref={logRef} onScroll={onScroll}>
         {displayText || <span className="placeholder">Server output will appear here once you hit Start.</span>}
       </div>
       {error && <div className="error-text">{error}</div>}

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { parseChatLines, type ChatEntry } from "../chatParser";
+import { useAutoFollow } from "../hooks/useAutoFollow";
+import { enqueueMojangLookup } from "../lib/mojangLookupQueue";
 import { PlayerAvatar } from "./PlayerAvatar";
 
 interface Props {
@@ -18,8 +20,6 @@ interface Props {
 export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
   const hasLiveLines = logLines.length > 0;
   const [fallbackContent, setFallbackContent] = useState("");
-  const [autoFollow, setAutoFollow] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (hasLiveLines || !isRunning) {
@@ -52,13 +52,11 @@ export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
 
   // Off by default would mean chat you're actively reading keeps getting
   // yanked to the bottom on every new message; on by default (with a button
-  // to turn it off) lets you scroll back through history without a fight,
-  // while still following along by default like a normal chat window.
-  useEffect(() => {
-    if (autoFollow && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [entries.length, autoFollow]);
+  // to turn it off, and turning itself off/on as the user scrolls away
+  // from/back to the bottom - see useAutoFollow) lets you scroll back
+  // through history without a fight, while still following along by default
+  // like a normal chat window.
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(entries.length);
 
   return (
     <>
@@ -74,13 +72,19 @@ export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
           </button>
         </div>
       </div>
-      <div className="log-console chat-console" ref={logRef}>
+      <div className="log-console chat-console" ref={logRef} onScroll={onScroll}>
         {entries.length === 0 ? (
           <span className="placeholder">
             Chat, joins/leaves, and private messages will appear here once the server's running.
           </span>
         ) : (
-          entries.map((entry, i) => <ChatLine key={i} entry={entry} />)
+          entries.map((entry, i) => (
+            <ChatLine
+              key={i}
+              entry={entry}
+              onModerate={isRunning ? (command) => api.sendInstanceCommand(instanceId, command) : undefined}
+            />
+          ))
         )}
       </div>
     </>
@@ -107,14 +111,15 @@ function usePlayerUuid(name: string | undefined): string | null {
       return;
     }
     let cancelled = false;
-    api
-      .lookupPlayerUuid(name)
+    enqueueMojangLookup(() => api.lookupPlayerUuid(name))
       .then((id) => {
         uuidCache.set(name, id);
         if (!cancelled) setUuid(id);
       })
       .catch(() => {
-        uuidCache.set(name, null);
+        // A transport-level failure (not a resolved "no such player", which
+        // comes back as a plain `null` above) - transient, so left uncached
+        // rather than permanently blacklisting this name.
       });
     return () => {
       cancelled = true;
@@ -133,7 +138,53 @@ function ChatAvatar({ name }: { name: string | undefined }) {
   return <PlayerAvatar uuid={uuid ?? `offline-${name}`} username={name} className="player-row-avatar chat-line-avatar" size={20} />;
 }
 
-export function ChatLine({ entry }: { entry: ChatEntry }) {
+/** Runs a raw moderation command against whichever backend a chat tab talks
+ * to - `api.sendInstanceCommand` locally, `remoteApi(...).sendCommand` for a
+ * remote-linked server (see ChatPanel/RemoteInstanceDetail). Undefined when
+ * the server isn't running (nothing to send a console command to), in which
+ * case `ChatLine` shows no moderation actions at all rather than a row of
+ * buttons that would just error out. */
+type ModerateFn = (command: string) => Promise<unknown>;
+
+/** Kick/Ban/Ban IP for one chat participant, right where you're reading what
+ * they said - saves a trip to the Players tab for the common case of
+ * moderating someone based on something they just said in chat. Vanilla's
+ * own `ban-ip` accepts an online player's name directly (resolving their
+ * current IP itself), so this needs nothing beyond the name every other
+ * action here already has. Hidden until the row is hovered, and entirely
+ * absent when there's no console to send a command to. */
+function ModerationActions({ name, onModerate }: { name: string; onModerate: ModerateFn }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(action: string, command: string) {
+    setBusy(action);
+    setError(null);
+    try {
+      await onModerate(command);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <span className="chat-line-actions" title={error ?? undefined}>
+      <button className="ghost-btn small" disabled={busy !== null} onClick={() => run("kick", `kick ${name}`)}>
+        {busy === "kick" ? "Kicking…" : "Kick"}
+      </button>
+      <button className="ghost-btn small" disabled={busy !== null} onClick={() => run("ban", `ban ${name}`)}>
+        {busy === "ban" ? "Banning…" : "Ban"}
+      </button>
+      <button className="ghost-btn small" disabled={busy !== null} onClick={() => run("ban-ip", `ban-ip ${name}`)}>
+        {busy === "ban-ip" ? "Banning…" : "Ban IP"}
+      </button>
+    </span>
+  );
+}
+
+export function ChatLine({ entry, onModerate }: { entry: ChatEntry; onModerate?: ModerateFn }) {
   if (entry.type === "chat") {
     return (
       <div className="chat-line">
@@ -142,6 +193,7 @@ export function ChatLine({ entry }: { entry: ChatEntry }) {
           <span className="chat-line-player">{entry.player}</span>
           <span className="chat-line-text">{entry.message}</span>
         </div>
+        {onModerate && entry.player && <ModerationActions name={entry.player} onModerate={onModerate} />}
       </div>
     );
   }
@@ -151,15 +203,17 @@ export function ChatLine({ entry }: { entry: ChatEntry }) {
   if (entry.type === "leave") {
     return <div className="chat-line chat-line-system">← {entry.player} left the game</div>;
   }
+  const whisperTarget = entry.player ?? entry.target;
   return (
     <div className="chat-line chat-line-whisper">
-      <ChatAvatar name={entry.player ?? entry.target} />
+      <ChatAvatar name={whisperTarget} />
       <div className="chat-line-body">
         <span className="chat-line-badge">Private</span>
         <span className="chat-line-player">{entry.player ?? "You"}</span>
         {entry.target && <span className="chat-line-text"> → {entry.target}</span>}
         <span className="chat-line-text">: {entry.message}</span>
       </div>
+      {onModerate && whisperTarget && <ModerationActions name={whisperTarget} onModerate={onModerate} />}
     </div>
   );
 }

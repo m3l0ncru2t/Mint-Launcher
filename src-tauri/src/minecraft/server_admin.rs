@@ -121,10 +121,19 @@ pub fn add_op(game_dir: &Path, uuid: String, name: String) -> std::io::Result<()
 /// to resolve and write it itself the way the `op`/`whitelist add` console
 /// commands do.
 pub async fn lookup_uuid(client: &reqwest::Client, username: &str) -> anyhow::Result<(String, String)> {
-    let resp = client
-        .get(format!("https://api.mojang.com/users/profiles/minecraft/{username}"))
-        .send()
-        .await?;
+    let url = format!("https://api.mojang.com/users/profiles/minecraft/{username}");
+    let mut resp = client.get(&url).send().await?;
+    // A 429 (rate-limited) or 5xx (Mojang having a bad moment) isn't the same
+    // as "no such player" - without this retry, a burst of concurrent
+    // lookups (e.g. every distinct name in a chat backlog resolving its
+    // avatar at once) could get some of them rate-limited, and the caller
+    // (`commands::auth::lookup_player_uuid`) caches a lookup failure as "no
+    // account" *forever*, so a transient hiccup here silently and
+    // permanently broke a real player's head.
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || resp.status().is_server_error() {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        resp = client.get(&url).send().await?;
+    }
     if !resp.status().is_success() {
         anyhow::bail!("No such player \"{username}\"");
     }

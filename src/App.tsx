@@ -23,6 +23,7 @@ import type {
   InstanceRunningEvent,
   LaunchProgressEvent,
   RemoteServerLink,
+  RestartCountdownEvent,
   RunningInstance,
   Settings,
 } from "./types";
@@ -58,6 +59,7 @@ export default function App() {
   const [progressByInstance, setProgressByInstance] = useState<Record<string, LaunchProgressEvent>>({});
   const [logsByInstance, setLogsByInstance] = useState<Record<string, string[]>>({});
   const [runningByInstance, setRunningByInstance] = useState<Record<string, RunningInstance>>({});
+  const [restartCountdownByInstance, setRestartCountdownByInstance] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     Promise.all([
@@ -94,6 +96,17 @@ export default function App() {
         return { ...prev, [event.payload.instanceId]: [...existing, event.payload.line].slice(-5000) };
       });
     });
+    const unlistenRestartCountdown = listen<RestartCountdownEvent>("restart-countdown", (event) => {
+      setRestartCountdownByInstance((prev) => {
+        const next = { ...prev };
+        if (event.payload.secondsRemaining === null) {
+          delete next[event.payload.instanceId];
+        } else {
+          next[event.payload.instanceId] = event.payload.secondsRemaining;
+        }
+        return next;
+      });
+    });
     // Fired whenever a launch actually starts/stops a game process - kept
     // separate from `progressByInstance` (which also covers the download
     // stages before the game process exists) so the sidebar can show a
@@ -113,6 +126,7 @@ export default function App() {
     return () => {
       unlistenProgress.then((f) => f());
       unlistenLog.then((f) => f());
+      unlistenRestartCountdown.then((f) => f());
       unlistenRunning.then((f) => f());
     };
   }, []);
@@ -267,6 +281,7 @@ export default function App() {
           progress={progressByInstance[selectedInstance.id] ?? null}
           logLines={logsByInstance[selectedInstance.id] ?? []}
           pid={runningByInstance[selectedInstance.id]?.pid ?? null}
+          restartCountdown={restartCountdownByInstance[selectedInstance.id] ?? null}
           showConfigsLogsTabs={settings.experimentalConfigsLogsTabs}
           spaciousView={settings.spaciousInstanceView}
           onDelete={setConfirmDeleteId}

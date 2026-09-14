@@ -179,6 +179,14 @@ export interface ProcessStats {
   systemTotalMemoryMb: number;
 }
 
+export interface RestartCountdownEvent {
+  instanceId: string;
+  /** Seconds left in the pre-restart warning, or `null` once the countdown
+   * has ended - either because it ran its course (a stop+relaunch is now
+   * underway) or was canceled (the server was left running). */
+  secondsRemaining: number | null;
+}
+
 export interface InstanceRunningEvent {
   instanceId: string;
   running: boolean;

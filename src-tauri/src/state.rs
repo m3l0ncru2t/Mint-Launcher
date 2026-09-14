@@ -90,6 +90,14 @@ pub struct AppState {
     /// Mint has to redo the join/hasJoined handshake, which is quick and
     /// keeps no long-lived secret on disk.
     pub remote_sessions: Mutex<HashMap<String, RemoteSession>>,
+    /// One entry per instance currently running its pre-restart countdown
+    /// (see `commands::launch::broadcast_restart_countdown`) - sending `true`
+    /// down it is how `cancel_restart` calls off an in-progress restart
+    /// without touching the server process at all. Removed again the moment
+    /// the countdown this entry belongs to ends, whether it finished or was
+    /// canceled, so a stale sender from a previous restart can never cancel
+    /// a later, unrelated one.
+    pub restart_cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
 impl AppState {
@@ -110,6 +118,7 @@ impl AppState {
             uuid_cache: Mutex::new(HashMap::new()),
             tps_samples: Mutex::new(HashMap::new()),
             remote_sessions: Mutex::new(HashMap::new()),
+            restart_cancellations: Mutex::new(HashMap::new()),
         }
     }
 

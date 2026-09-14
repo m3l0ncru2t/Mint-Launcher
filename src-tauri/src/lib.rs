@@ -157,6 +157,7 @@ pub fn run() {
             commands::launch::launch_instance,
             commands::launch::stop_instance,
             commands::launch::restart_instance,
+            commands::launch::cancel_restart,
             commands::launch::kill_instance,
             commands::launch::send_instance_command,
             commands::launch::list_online_players,

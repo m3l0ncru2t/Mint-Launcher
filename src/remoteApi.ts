@@ -216,6 +216,7 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
     start: () => request("/start", { method: "POST" }),
     stop: () => request("/stop", { method: "POST" }),
     restart: () => request("/restart", { method: "POST" }),
+    cancelRestart: () => request("/restart/cancel", { method: "POST" }),
     kill: () => request("/kill", { method: "POST" }),
   };
 }

@@ -98,42 +98,101 @@ async fn write_console_line(
         .map_err(|_| "Console access isn't available for this server".to_string())
 }
 
-/// Broadcasts a `say` countdown (60s, 30s, 10s, 5s) to any connected players
-/// before the actual stop+relaunch, so a restart doesn't just drop everyone
-/// with no warning. Uses `write_console_line`, so this reaches players even
-/// for an instance Mint only adopted after restarting, as long as RCON is
-/// available for it; silently does nothing if neither console path is.
-async fn broadcast_restart_countdown(state: &AppState, instance_id: &str) {
+/// Broadcasts a `say` countdown (60s, 30s, 10s, then "now") to any connected
+/// players before the actual stop+relaunch, so a restart doesn't just drop
+/// everyone with no warning. Uses `write_console_line`, so this reaches
+/// players even for an instance Mint only adopted after restarting, as long
+/// as RCON is available for it; silently does nothing if neither console
+/// path is. Also emits `restart-countdown` after each announcement so the UI
+/// can show a live countdown and a Cancel button (see `cancel_restart`), and
+/// registers a cancellation channel in `AppState.restart_cancellations` for
+/// the duration - `cancel_restart` sending `true` down it wakes the
+/// `tokio::select!` below immediately instead of waiting out the rest of the
+/// step's delay. Returns `false` if canceled partway through (in which case
+/// the caller must leave the server running, not stop it), `true` if the
+/// full countdown ran its course.
+async fn broadcast_restart_countdown(app: &tauri::AppHandle, state: &AppState, instance_id: &str) -> bool {
     let game_dir = instance::get_instance(&state.instances_dir(), instance_id)
         .ok()
         .flatten()
         .map(|inst| inst.game_dir(&state.instances_dir()));
-    // The last step announces the restart itself rather than "in 5 seconds"
-    // - by the time anyone reads it, it's already happening.
-    const STEPS: [(&str, u64); 4] = [
-        ("Server restarting in 60 seconds", 30),
-        ("Server restarting in 30 seconds", 20),
-        ("Server restarting in 10 seconds", 5),
-        ("Server restarting", 5),
-    ];
-    for (message, wait_after) in STEPS {
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    state.restart_cancellations.lock().await.insert(instance_id.to_string(), cancel_tx);
+
+    // The last step announces the restart itself (0 "seconds remaining")
+    // rather than "in 5 seconds" - by the time anyone reads it, it's already
+    // happening.
+    const STEPS: [(u64, u64); 4] = [(60, 30), (30, 20), (10, 5), (0, 5)];
+    let mut canceled = false;
+    'countdown: for (seconds_remaining, wait_after) in STEPS {
         if let Some(game_dir) = &game_dir {
+            let message = if seconds_remaining == 0 {
+                "Server restarting".to_string()
+            } else {
+                format!("Server restarting in {seconds_remaining} seconds")
+            };
             let _ = write_console_line(state, game_dir, instance_id, &format!("say {message}")).await;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(wait_after)).await;
+        let _ = app.emit(
+            "restart-countdown",
+            serde_json::json!({ "instanceId": instance_id, "secondsRemaining": seconds_remaining }),
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(wait_after)) => {}
+            _ = cancel_rx.changed() => {
+                if *cancel_rx.borrow() {
+                    canceled = true;
+                    break 'countdown;
+                }
+            }
+        }
+    }
+
+    state.restart_cancellations.lock().await.remove(instance_id);
+    let _ = app.emit(
+        "restart-countdown",
+        serde_json::json!({ "instanceId": instance_id, "secondsRemaining": Option::<u64>::None }),
+    );
+    if canceled {
+        if let Some(game_dir) = &game_dir {
+            let _ = write_console_line(state, game_dir, instance_id, "say Restart canceled").await;
+        }
+    }
+    !canceled
+}
+
+/// Calls off an in-progress restart countdown (see `broadcast_restart_countdown`),
+/// leaving the server running untouched. A no-op (returning `false`) if
+/// there's no countdown in progress for this instance - e.g. it already
+/// finished and the stop/relaunch is already underway, too late to call back.
+#[tauri::command]
+pub async fn cancel_restart(state: State<'_, AppState>, instance_id: String) -> Result<bool, String> {
+    let map = state.restart_cancellations.lock().await;
+    match map.get(&instance_id) {
+        Some(tx) => {
+            let _ = tx.send(true);
+            Ok(true)
+        }
+        None => Ok(false),
     }
 }
 
 /// Restart, with warning: if the instance is currently running, broadcasts
 /// the countdown above before stopping it, then launches it again either
-/// way. Used by both the local Restart button and the remote `/restart`
-/// endpoint, so an admin restarting someone else's server gives the same
-/// heads-up a local restart does.
+/// way - unless the countdown was canceled, in which case the server is left
+/// running exactly as it was. Used by both the local Restart button and the
+/// remote `/restart` endpoint, so an admin restarting someone else's server
+/// gives the same heads-up (and the same chance to call it off) a local
+/// restart does.
 #[tauri::command]
 pub async fn restart_instance(app: tauri::AppHandle, state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
     let running = state.running_instances.lock().await.contains_key(&instance_id);
     if running {
-        broadcast_restart_countdown(&state, &instance_id).await;
+        let completed = broadcast_restart_countdown(&app, &state, &instance_id).await;
+        if !completed {
+            return Ok(());
+        }
         let _ = stop_instance(app.clone(), app.state::<AppState>(), instance_id.clone()).await;
     }
     // `launch_instance`'s own future doesn't resolve until the process it
@@ -221,12 +280,33 @@ async fn rcon_execute(game_dir: &std::path::Path, command: &str) -> Result<Strin
 /// good enough for scanning console output for a known ASCII pattern, where
 /// a mangled multi-byte character right at the truncation point (if any)
 /// can't land inside the pattern itself.
+///
+/// Seeks to the tail instead of reading the whole file: this is called every
+/// few seconds by the player-count/TPS polling while a server is running,
+/// against `logs/latest.log`, which only grows (Minecraft doesn't rotate it
+/// until the server restarts). A `std::fs::read` here re-read and
+/// reallocated the *entire* log on every poll, so a server left running for
+/// hours - with a latest.log tens or hundreds of MB in - turned a "grab the
+/// last 8KB" call into a multi-megabyte disk read+alloc several times a
+/// minute, which is what made the whole UI feel laggier the longer an
+/// instance stayed up.
 pub(crate) fn tail_lines(path: &std::path::Path, max_bytes: usize) -> String {
-    let Ok(data) = std::fs::read(path) else {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
         return String::new();
     };
-    let start = data.len().saturating_sub(max_bytes);
-    String::from_utf8_lossy(&data[start..]).into_owned()
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return String::new();
+    };
+    let start = len.saturating_sub(max_bytes as u64);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut data = Vec::with_capacity((len - start) as usize);
+    if file.read_to_end(&mut data).is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&data).into_owned()
 }
 
 /// Parses vanilla's own response to the `list` command - `There are X of a

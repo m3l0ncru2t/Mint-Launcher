@@ -60,12 +60,21 @@ export function parseChatLine(rawLine: string): ChatEntry | null {
 
 // A Discord-bridge mod relaying a message back into chat (or a modpack's
 // log4j config double-appending every line on its own) tends to produce a
-// second, near-identical line within a couple of seconds - not necessarily
-// the very next line, since other players' chat can land in between. A
-// plain "is it the same as the line right before it" check (adjacent-only)
-// misses that; comparing against the last *kept* occurrence of the same
-// content within this window catches it regardless of what's interleaved.
-const DEDUPE_WINDOW_SECONDS = 4;
+// second, near-identical line within a few seconds - not necessarily the
+// very next line, since other players' chat can land in between. A plain
+// "is it the same as the line right before it" check (adjacent-only) misses
+// that; comparing against the last *kept* occurrence of the same content
+// within this window catches it regardless of what's interleaved. Widened
+// from an earlier, tighter 4s window that still let slower relays (a
+// Discord round-trip is rarely sub-second) through as visible duplicates.
+const DEDUPE_WINDOW_SECONDS = 10;
+
+// Seconds in a day - `entry.seconds` is "seconds since midnight" from the
+// log4j timestamp, so a duplicate whose two copies straddle midnight (e.g.
+// 23:59:58 and 00:00:02) needs the gap computed on a wrapped clock, or it
+// reads as a ~24-hour-old previous line instead of a 4-second-old one and
+// slips through undeduped.
+const SECONDS_PER_DAY = 86400;
 
 export function parseChatLines(text: string): ChatEntry[] {
   const entries = text
@@ -79,8 +88,11 @@ export function parseChatLines(text: string): ChatEntry[] {
     const prev = lastKeptSeconds.get(key);
     // No timestamp on either side (shouldn't normally happen) - can't judge
     // proximity, so don't risk dropping a legitimate message.
-    const isDuplicate =
-      prev !== undefined && entry.seconds !== undefined && entry.seconds - prev >= 0 && entry.seconds - prev <= DEDUPE_WINDOW_SECONDS;
+    let isDuplicate = false;
+    if (prev !== undefined && entry.seconds !== undefined) {
+      const gap = ((entry.seconds - prev) % SECONDS_PER_DAY + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+      isDuplicate = gap <= DEDUPE_WINDOW_SECONDS;
+    }
     if (!isDuplicate) {
       lastKeptSeconds.set(key, entry.seconds ?? prev ?? 0);
     }

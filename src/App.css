@@ -1139,7 +1139,7 @@ button {
 
 .chat-console {
   font-family: inherit;
-  font-size: 13px;
+  font-size: 15px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1150,6 +1150,19 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.chat-line-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.chat-line:hover .chat-line-actions {
+  opacity: 1;
 }
 
 .chat-line-avatar {
