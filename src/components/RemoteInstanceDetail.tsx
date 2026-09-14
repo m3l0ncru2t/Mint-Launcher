@@ -817,7 +817,16 @@ function RemoteConsoleTab({
     return streamConsoleTailThenLive(
       api,
       (initial) => setLines(initial),
-      (line) => setLines((prev) => [...prev.slice(-2000), line]),
+      // Batched (only trims once 2200 have piled up, back down to 2000)
+      // rather than by exactly one on every single line - both tabs below
+      // render one element per line keyed by array index for cheap
+      // append-only updates, and trimming from the front on every push would
+      // shift every index every time, defeating that.
+      (line) =>
+        setLines((prev) => {
+          const next = [...prev, line];
+          return next.length > 2200 ? next.slice(-2000) : next;
+        }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
@@ -849,7 +858,7 @@ function RemoteConsoleTab({
       </div>
       <div className="log-console" ref={logRef} onScroll={onScroll}>
         {lines.length > 0 ? (
-          lines.join("\n")
+          lines.map((line, i) => <div key={i}>{line}</div>)
         ) : (
           <span className="placeholder">
             {isRunning ? "Waiting for console output…" : "Server output will appear here once it's running."}
@@ -874,7 +883,16 @@ function RemoteChatTab({
     return streamConsoleTailThenLive(
       api,
       (initial) => setLines(initial),
-      (line) => setLines((prev) => [...prev.slice(-2000), line]),
+      // Batched (only trims once 2200 have piled up, back down to 2000)
+      // rather than by exactly one on every single line - both tabs below
+      // render one element per line keyed by array index for cheap
+      // append-only updates, and trimming from the front on every push would
+      // shift every index every time, defeating that.
+      (line) =>
+        setLines((prev) => {
+          const next = [...prev, line];
+          return next.length > 2200 ? next.slice(-2000) : next;
+        }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);

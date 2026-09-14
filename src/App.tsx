@@ -93,7 +93,16 @@ export default function App() {
         // ServerConsolePanel/ChatPanel), so the GUI got measurably slower
         // the longer an instance stayed open. The full history is still on
         // disk and available via the Logs tab; this is just the live buffer.
-        return { ...prev, [event.payload.instanceId]: [...existing, event.payload.line].slice(-5000) };
+        //
+        // Trimmed in batches (only once 5500 lines have piled up, back down
+        // to 5000) rather than by exactly one on every single push: Console/
+        // Chat render one element per line keyed by array index for cheap
+        // append-only updates, and trimming from the front on every push
+        // would shift every one of those indices every single time,
+        // defeating that - a batch trim still bounds memory the same way,
+        // but only reshuffles once every 500 lines instead of on every one.
+        const next = [...existing, event.payload.line];
+        return { ...prev, [event.payload.instanceId]: next.length > 5500 ? next.slice(-5000) : next };
       });
     });
     const unlistenRestartCountdown = listen<RestartCountdownEvent>("restart-countdown", (event) => {

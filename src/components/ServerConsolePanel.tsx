@@ -16,13 +16,6 @@ interface Props {
 // the Logs tab, which reads it) stays complete and untouched.
 const MINT_POLL_LINE_PATTERN = /\bof a max of \d+ players online\b|\btime is \d+/;
 
-function stripMintPolling(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => !MINT_POLL_LINE_PATTERN.test(line))
-    .join("\n");
-}
-
 export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   const [copied, setCopied] = useState(false);
   const [command, setCommand] = useState("");
@@ -46,14 +39,17 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   // show instead of a permanently blank console.
   const hasLiveLines = logLines.length > 0;
   const [fallbackContent, setFallbackContent] = useState("");
-  // Without this memo, every unrelated re-render (TPS/stats/player-count
-  // polling in InstanceDetail fires every few seconds) re-joined and
-  // re-filtered the *entire* console text again, even though nothing here
-  // had changed - increasingly expensive the longer a busy server ran and
-  // the more it had logged. Only actually recompute when the text itself
-  // (a new line, or a fresh fallback poll) changes.
-  const displayText = useMemo(
-    () => (hasLiveLines ? stripMintPolling(logLines.join("\n")) : stripMintPolling(fallbackContent)),
+  // Kept as a filtered *array*, not one big joined/rejoined string - a
+  // single text blob has to be entirely rebuilt and repainted on every
+  // incoming line (worse the more a busy server had logged, even capped at
+  // 5000 lines), where one <div> per line below lets the DOM just append the
+  // new ones. Still re-filters from scratch on every change rather than
+  // incrementally (simpler, and cheap: a regex test per line, no string
+  // copying), which is what the memo here guards against redoing on
+  // unrelated re-renders (TPS/stats/player-count polling in InstanceDetail
+  // fires every few seconds).
+  const displayLines = useMemo(
+    () => (hasLiveLines ? logLines : fallbackContent.split("\n")).filter((line) => !MINT_POLL_LINE_PATTERN.test(line)),
     [hasLiveLines, logLines, fallbackContent],
   );
 
@@ -81,10 +77,10 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   // up to read past output would keep getting yanked back down by the next
   // line. Turns itself off/on as the user scrolls away from/back to the
   // bottom, same as a normal chat window - see useAutoFollow.
-  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(displayText);
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(displayLines);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(displayText);
+    await navigator.clipboard.writeText(displayLines.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -115,13 +111,17 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
           >
             Auto-follow
           </button>
-          <button className="ghost-btn small" onClick={handleCopy} disabled={!displayText}>
+          <button className="ghost-btn small" onClick={handleCopy} disabled={displayLines.length === 0}>
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
       </div>
       <div className="log-console" ref={logRef} onScroll={onScroll}>
-        {displayText || <span className="placeholder">Server output will appear here once you hit Start.</span>}
+        {displayLines.length === 0 ? (
+          <span className="placeholder">Server output will appear here once you hit Start.</span>
+        ) : (
+          displayLines.map((line, i) => <div key={i}>{line}</div>)
+        )}
       </div>
       {error && <div className="error-text">{error}</div>}
       {isRunning && (
