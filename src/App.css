@@ -877,6 +877,13 @@ button {
   white-space: nowrap;
 }
 
+.mod-incompatible-badge {
+  color: var(--warning);
+  font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .player-row {
   cursor: default;
 }

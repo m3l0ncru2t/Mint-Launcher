@@ -12,6 +12,7 @@ import { InstanceDetail } from "./components/InstanceDetail";
 import { RemoteInstanceDetail } from "./components/RemoteInstanceDetail";
 import { ImportExternalDialog } from "./components/ImportExternalDialog";
 import { InstanceSettingsDialog } from "./components/InstanceSettingsDialog";
+import { ModCompatDialog } from "./components/ModCompatDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -22,6 +23,7 @@ import type {
   InstanceLogEvent,
   InstanceRunningEvent,
   LaunchProgressEvent,
+  ModUpdateInfo,
   RemoteServerLink,
   RestartCountdownEvent,
   RunningInstance,
@@ -55,6 +57,11 @@ export default function App() {
   const [showImportExternal, setShowImportExternal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [instanceSettingsFor, setInstanceSettingsFor] = useState<Instance | null>(null);
+  const [modCompatNotice, setModCompatNotice] = useState<{
+    instanceName: string;
+    versionId: string;
+    results: ModUpdateInfo[];
+  } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [progressByInstance, setProgressByInstance] = useState<Record<string, LaunchProgressEvent>>({});
   const [logsByInstance, setLogsByInstance] = useState<Record<string, string[]>>({});
@@ -372,13 +379,33 @@ export default function App() {
           instance={instanceSettingsFor}
           onClose={() => setInstanceSettingsFor(null)}
           onSaved={(updated) => {
+            const previous = instanceSettingsFor;
             setInstanceSettingsFor(null);
             refreshInstances(updated.id);
+            // A Minecraft-version or Fabric-loader change is the one kind of
+            // settings save where a mod that worked fine a moment ago can
+            // silently stop working - scan for that right away instead of
+            // leaving it to be noticed later via the Mods tab's own badges.
+            if (previous.versionId !== updated.versionId || previous.loaderVersion !== updated.loaderVersion) {
+              api
+                .checkModUpdates(updated.id)
+                .then((results) => setModCompatNotice({ instanceName: updated.name, versionId: updated.versionId, results }))
+                .catch(() => {});
+            }
           }}
           onIconChanged={(updated) => {
             setInstanceSettingsFor(updated);
             refreshInstances();
           }}
+        />
+      )}
+
+      {modCompatNotice && (
+        <ModCompatDialog
+          instanceName={modCompatNotice.instanceName}
+          versionId={modCompatNotice.versionId}
+          results={modCompatNotice.results}
+          onClose={() => setModCompatNotice(null)}
         />
       )}
 

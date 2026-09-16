@@ -129,6 +129,18 @@ pub struct ModUpdateInfo {
     pub latest_version: Option<String>,
     pub update_available: bool,
     pub download_url: Option<String>,
+    /// `false` only when Modrinth has *no* version of this project at all
+    /// for the game_version/loader this check ran against - distinct from
+    /// `update_available: false`, which is also true of a mod that's
+    /// already on the latest version for that target (`compatible: true`
+    /// there). Lets a post-version-change scan (see
+    /// `commands::instances::check_mod_updates`, called right after
+    /// changing an instance's Minecraft/Fabric version) tell "nothing to do"
+    /// apart from "no build of this mod exists for the version you just
+    /// moved to". Always `true` for a file Modrinth doesn't recognize at all
+    /// (`project_id: None`) - there's no data to call it incompatible, only
+    /// unmanaged.
+    pub compatible: bool,
 }
 
 pub async fn check_updates(
@@ -225,6 +237,7 @@ async fn check_updates_matching(
                 latest_version: None,
                 update_available: false,
                 download_url: None,
+                compatible: true,
             };
             on_result(&info);
             results.push(info);
@@ -254,6 +267,7 @@ async fn check_updates_matching(
                 .unwrap_or(None);
 
             let update_available = latest.as_ref().is_some_and(|l| l.id != current.id);
+            let compatible = latest.is_some();
             let download_url = latest
                 .as_ref()
                 .filter(|_| update_available)
@@ -277,6 +291,7 @@ async fn check_updates_matching(
                 latest_version: latest.map(|l| l.version_number),
                 update_available,
                 download_url,
+                compatible,
             }
         });
     }

@@ -300,6 +300,11 @@ export interface ModUpdateInfo {
   latestVersion: string | null;
   updateAvailable: boolean;
   downloadUrl: string | null;
+  /** `false` only when there's no known build of this mod at all for the
+   * game version/loader the check ran against - distinct from
+   * `updateAvailable: false`, which is also true of a mod that's already on
+   * the latest version for that target (`compatible: true` there). */
+  compatible: boolean;
 }
 
 export interface ModDetails {

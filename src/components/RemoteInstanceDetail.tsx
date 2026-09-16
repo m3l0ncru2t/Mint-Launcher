@@ -518,6 +518,7 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
   }
 
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
+  const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
 
   return (
     <>
@@ -527,6 +528,11 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
         {!checkingUpdates && updateCount > 0 && (
           <span className="hint-inline update-count">
             {updateCount} update{updateCount === 1 ? "" : "s"} available
+          </span>
+        )}
+        {!checkingUpdates && incompatibleCount > 0 && (
+          <span className="hint-inline mod-incompatible-badge">
+            {incompatibleCount} incompatible with the current version
           </span>
         )}
         <div className="panel-actions">
@@ -584,6 +590,9 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
                   {update?.title && <span className="mod-filename">{m.fileName}</span>}
                 </div>
                 {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+                {update && !update.updateAvailable && update.projectId && !update.compatible && (
+                  <span className="mod-incompatible-badge">Incompatible</span>
+                )}
                 <span className="mod-size">{formatSize(m.size)}</span>
                 {update?.updateAvailable && (
                   <button className="ghost-btn small" disabled={isUpdating} onClick={() => handleUpdate(update)}>
@@ -708,6 +717,7 @@ function RemoteResourcePacksTab({
   }
 
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
+  const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
 
   return (
     <>
@@ -717,6 +727,11 @@ function RemoteResourcePacksTab({
         {!checkingUpdates && updateCount > 0 && (
           <span className="hint-inline update-count">
             {updateCount} update{updateCount === 1 ? "" : "s"} available
+          </span>
+        )}
+        {!checkingUpdates && incompatibleCount > 0 && (
+          <span className="hint-inline mod-incompatible-badge">
+            {incompatibleCount} incompatible with the current version
           </span>
         )}
         <div className="panel-actions">
@@ -774,6 +789,9 @@ function RemoteResourcePacksTab({
                   {update?.title && <span className="mod-filename">{p.fileName}</span>}
                 </div>
                 {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+                {update && !update.updateAvailable && update.projectId && !update.compatible && (
+                  <span className="mod-incompatible-badge">Incompatible</span>
+                )}
                 <span className="mod-size">{formatSize(p.size)}</span>
                 {update?.updateAvailable && (
                   <button className="ghost-btn small" disabled={isUpdating} onClick={() => handleUpdate(update)}>

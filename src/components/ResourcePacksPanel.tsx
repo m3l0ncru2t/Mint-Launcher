@@ -155,6 +155,7 @@ export function ResourcePacksPanel({ instanceId }: Props) {
   }
 
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
+  const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
 
   return (
     <>
@@ -164,6 +165,11 @@ export function ResourcePacksPanel({ instanceId }: Props) {
         {!checkingUpdates && updateCount > 0 && (
           <span className="hint-inline update-count">
             {updateCount} update{updateCount === 1 ? "" : "s"} available
+          </span>
+        )}
+        {!checkingUpdates && incompatibleCount > 0 && (
+          <span className="hint-inline mod-incompatible-badge">
+            {incompatibleCount} incompatible with the current version
           </span>
         )}
         <div className="panel-actions">
@@ -215,6 +221,9 @@ export function ResourcePacksPanel({ instanceId }: Props) {
                   {update?.title && <span className="mod-filename">{p.fileName}</span>}
                 </div>
                 {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+                {update && !update.updateAvailable && update.projectId && !update.compatible && (
+                  <span className="mod-incompatible-badge">Incompatible</span>
+                )}
                 <span className="mod-size">{formatSize(p.size)}</span>
                 {update?.updateAvailable && (
                   <button

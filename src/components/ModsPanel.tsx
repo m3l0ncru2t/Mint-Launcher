@@ -183,6 +183,12 @@ export function ModsPanel({ instanceId }: Props) {
   }
 
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
+  // A mod Modrinth knows about but has genuinely no build of for this
+  // instance's current game version/loader - most relevant right after
+  // changing the Minecraft or Fabric version (see InstanceSettingsDialog's
+  // post-update scan), where "no update" alone doesn't say whether a mod is
+  // fine or just abandoned for the new target.
+  const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
   const primaryMods = mods.filter((m) => !m.isDependency);
   const dependencyMods = mods.filter((m) => m.isDependency);
 
@@ -214,6 +220,11 @@ export function ModsPanel({ instanceId }: Props) {
           {update?.title && <span className="mod-filename">{m.fileName}</span>}
         </div>
         {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+        {update && !update.updateAvailable && update.projectId && !update.compatible && (
+          <span className="mod-incompatible-badge" title="No build of this mod is published for the current game version/loader yet">
+            Incompatible
+          </span>
+        )}
         <span className="mod-size">{formatSize(m.size)}</span>
         {update?.updateAvailable && (
           <button
@@ -248,6 +259,11 @@ export function ModsPanel({ instanceId }: Props) {
         {checkingUpdates && <span className="hint-inline">Checking for updates…</span>}
         {!checkingUpdates && updateCount > 0 && (
           <span className="hint-inline update-count">{updateCount} update{updateCount === 1 ? "" : "s"} available</span>
+        )}
+        {!checkingUpdates && incompatibleCount > 0 && (
+          <span className="hint-inline mod-incompatible-badge">
+            {incompatibleCount} incompatible with the current version
+          </span>
         )}
         <div className="panel-actions">
           <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
