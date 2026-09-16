@@ -262,12 +262,18 @@ async fn check_updates_matching(
         let semaphore = semaphore.clone();
         join_set.spawn(async move {
             let _permit = semaphore.acquire_owned().await.ok();
-            let latest = fetch_latest_compatible(&client, &current.project_id, &game_version, loader.as_deref())
-                .await
-                .unwrap_or(None);
+            // `Err` (a failed/rate-limited lookup, see fetch_latest_compatible's
+            // doc comment) is deliberately *not* folded into "no compatible
+            // version" here - that previously reported every mod caught by a
+            // rate-limit as incompatible, which is worse than just not
+            // knowing. Treated as "couldn't confirm either way": no update
+            // shown, and not flagged incompatible.
+            let lookup = fetch_latest_compatible(&client, &current.project_id, &game_version, loader.as_deref()).await;
+            let lookup_failed = lookup.is_err();
+            let latest = lookup.unwrap_or(None);
 
             let update_available = latest.as_ref().is_some_and(|l| l.id != current.id);
-            let compatible = latest.is_some();
+            let compatible = latest.is_some() || lookup_failed;
             let download_url = latest
                 .as_ref()
                 .filter(|_| update_available)
@@ -307,6 +313,16 @@ async fn check_updates_matching(
     Ok(results)
 }
 
+/// `Ok(None)` here means Modrinth *positively confirmed* there's no version
+/// of this project for the given game_version/loader - the only case that
+/// should ever be reported as "incompatible" to the caller. A failed
+/// request (rate-limited, network hiccup, Modrinth having a bad moment) is
+/// an `Err` instead of folding into `Ok(None)` - checking a whole mod list
+/// fires this for every mod a few at a time (see the semaphore in
+/// `check_updates_matching`), and a big pack can still trip Modrinth's rate
+/// limit even at that concurrency. Conflating "couldn't check" with
+/// "confirmed incompatible" was reporting every mod caught in that as
+/// broken, which is worse than not knowing.
 async fn fetch_latest_compatible(
     client: &reqwest::Client,
     project_id: &str,
@@ -320,14 +336,22 @@ async fn fetch_latest_compatible(
         query.push(("loaders", p.as_str()));
     }
 
-    let resp = client
+    let mut resp = client
         .get(format!("{MODRINTH_BASE}/project/{project_id}/version"))
         .query(&query)
         .send()
         .await?;
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || resp.status().is_server_error() {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        resp = client
+            .get(format!("{MODRINTH_BASE}/project/{project_id}/version"))
+            .query(&query)
+            .send()
+            .await?;
+    }
 
     if !resp.status().is_success() {
-        return Ok(None);
+        anyhow::bail!("Modrinth returned {} for project {project_id}", resp.status());
     }
 
     let versions: Vec<ModrinthVersion> = resp.json().await?;
