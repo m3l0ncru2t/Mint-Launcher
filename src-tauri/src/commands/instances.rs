@@ -538,6 +538,20 @@ pub async fn export_instance(state: State<'_, AppState>, id: String, dest_path: 
     .map_err(|e| e.to_string())
 }
 
+/// Refused while the source is running: copying a world (or a server's
+/// files) that's being written to can capture a half-saved, corrupt state.
+#[tauri::command]
+pub async fn duplicate_instance(state: State<'_, AppState>, id: String) -> Result<Instance, String> {
+    if state.running_instances.lock().await.contains_key(&id) {
+        return Err("Stop this instance before duplicating it".to_string());
+    }
+    let instances_dir = state.instances_dir();
+    tauri::async_runtime::spawn_blocking(move || instance::duplicate_instance(&instances_dir, &id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn import_instance(state: State<'_, AppState>, source_path: String) -> Result<Instance, String> {
     let instances_dir = state.instances_dir();

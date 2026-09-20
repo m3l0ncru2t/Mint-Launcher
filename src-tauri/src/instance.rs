@@ -423,6 +423,86 @@ pub fn import_instance(instances_root: &Path, zip_path: &Path) -> anyhow::Result
     Ok(inst)
 }
 
+fn copy_dir_recursive(src: &Path, dest: &Path, skip: &dyn Fn(&Path) -> bool) -> std::io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        if skip(&path) {
+            continue;
+        }
+        let target = dest.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&path, &target, skip)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, &target)?;
+        }
+        // Symlinks are skipped rather than followed - one pointing back up
+        // the tree would recurse forever, and one pointing outside it would
+        // silently pull unrelated files into the copy.
+    }
+    Ok(())
+}
+
+/// Copies an instance - worlds, mods, config, icon, settings - into a brand
+/// new one under a fresh id and folder, so it can be tweaked (a new Minecraft
+/// version, a different mod set) without touching the original. Works for an
+/// in-place imported server too: its `game_dir()` lives outside Mint's tree,
+/// but the copy is always made *inside* it (`external_dir` is cleared), so
+/// the original folder is only ever read. `natives/` is left out (re-extracted
+/// on every launch) and so is the game's `logs/` (can be huge, and a copy
+/// shouldn't inherit the original's history).
+pub fn duplicate_instance(instances_root: &Path, id: &str) -> anyhow::Result<Instance> {
+    let source = get_instance(instances_root, id)?.ok_or_else(|| anyhow::anyhow!("Instance not found"))?;
+
+    let mut copy = source.clone();
+    copy.id = Uuid::new_v4().to_string();
+    copy.name = format!("{} (copy)", source.name);
+    copy.dir_name = unique_dir_name(instances_root, &copy.name);
+    copy.created_at = chrono::Utc::now().to_rfc3339();
+    copy.last_played = None;
+    copy.sort_order = chrono::Utc::now().timestamp_millis();
+    copy.external_dir = None;
+
+    let source_dir = source.dir(instances_root);
+    let source_game = source.game_dir(instances_root);
+    let dest_dir = copy.dir(instances_root);
+    let dest_game = copy.game_dir(instances_root);
+
+    let result = (|| -> std::io::Result<()> {
+        // Everything at the top level of the instance folder except the game
+        // dir (copied separately below, since for an external server it isn't
+        // under `source_dir` at all) and natives/instance.json.
+        fs::create_dir_all(&dest_dir)?;
+        for entry in fs::read_dir(&source_dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name == "game" || name == "natives" || name == "instance.json" {
+                continue;
+            }
+            let file_type = entry.file_type()?;
+            let target = dest_dir.join(&name);
+            if file_type.is_dir() {
+                copy_dir_recursive(&entry.path(), &target, &|_| false)?;
+            } else if file_type.is_file() {
+                fs::copy(entry.path(), target)?;
+            }
+        }
+        let logs_dir = source_game.join("logs");
+        copy_dir_recursive(&source_game, &dest_game, &|p| p == logs_dir)
+    })();
+
+    if let Err(e) = result {
+        // Don't leave a half-copied instance folder sitting in the list.
+        let _ = fs::remove_dir_all(&dest_dir);
+        return Err(e.into());
+    }
+
+    copy.save(instances_root)?;
+    Ok(copy)
+}
+
 /// Identifies an uploaded icon's format from its content rather than trusting
 /// a file extension or client-supplied MIME type, both for the data URL
 /// served back to the frontend and to reject non-image uploads up front.

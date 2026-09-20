@@ -46,6 +46,7 @@ export default function App() {
     remoteAdminEnabled: false,
     remoteAdminPort: 25580,
     remoteAdminInstanceId: null,
+    remoteAdminFullAccessUuids: [],
     spaciousInstanceView: false,
   });
   const [remoteServers, setRemoteServers] = useState<RemoteServerLink[]>([]);

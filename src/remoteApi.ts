@@ -158,7 +158,7 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
       return () => ws.close();
     },
 
-    getStatus: () => request("/status").then((r) => r.json() as Promise<{ running: boolean }>),
+    getStatus: () => request("/status").then((r) => r.json() as Promise<{ running: boolean; fullAccess: boolean }>),
 
     getStats: () =>
       request("/stats").then(
@@ -184,6 +184,26 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command }),
+      }),
+
+    /** Only succeeds when the host's owner turned on full file access
+     * (403 otherwise) - see Settings > Remote Admin on the host. */
+    listFiles: (path: string) =>
+      request(`/files?path=${encodeURIComponent(path)}`).then(
+        (r) => r.json() as Promise<{ name: string; isDir: boolean; size: number }[]>,
+      ),
+
+    readFile: (path: string) =>
+      request(`/files/content?path=${encodeURIComponent(path)}`).then(
+        (r) => r.json() as Promise<{ content: string; size: number; truncated: boolean; editable: boolean }>,
+      ),
+
+    /** Overwrites an existing text file - needs full access, like the rest. */
+    writeFile: (path: string, content: string) =>
+      request("/files/content", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, content }),
       }),
 
     getOps: () => request("/ops").then((r) => r.json() as Promise<OpEntry[]>),

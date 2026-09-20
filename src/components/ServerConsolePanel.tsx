@@ -1,20 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAutoFollow } from "../hooks/useAutoFollow";
+import { isMintPollLine } from "../lib/consoleFilter";
 
 interface Props {
   instanceId: string;
   logLines: string[];
   isRunning: boolean;
 }
-
-// Mint itself polls the console with `list` and `time query gametime` every
-// few seconds (see InstanceDetail/PlayersPanel) to read player count and
-// TPS/MSPT without needing a network ping - useful data, but their raw
-// responses are pure implementation noise to a human watching the console.
-// Filtered only here, for display/copy - the actual log file on disk (and
-// the Logs tab, which reads it) stays complete and untouched.
-const MINT_POLL_LINE_PATTERN = /\bof a max of \d+ players online\b|\btime is \d+/;
 
 export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   const [copied, setCopied] = useState(false);
@@ -49,7 +42,7 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
   // unrelated re-renders (TPS/stats/player-count polling in InstanceDetail
   // fires every few seconds).
   const displayLines = useMemo(
-    () => (hasLiveLines ? logLines : fallbackContent.split("\n")).filter((line) => !MINT_POLL_LINE_PATTERN.test(line)),
+    () => (hasLiveLines ? logLines : fallbackContent.split("\n")).filter((line) => !isMintPollLine(line)),
     [hasLiveLines, logLines, fallbackContent],
   );
 

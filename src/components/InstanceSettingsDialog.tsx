@@ -50,6 +50,7 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
   const [showUnstableFabric, setShowUnstableFabric] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
   const [updatingFabricLoader, setUpdatingFabricLoader] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   const [mcVersions, setMcVersions] = useState<VersionManifestEntry[]>([]);
   const [loadingMcVersions, setLoadingMcVersions] = useState(true);
@@ -177,6 +178,19 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
       setError(String(e));
     } finally {
       setUpgrading(false);
+    }
+  }
+
+  async function handleDuplicate() {
+    setDuplicating(true);
+    setError(null);
+    try {
+      // Closes this dialog and selects the copy, same as any other save.
+      onSaved(await api.duplicateInstance(instance.id));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -610,6 +624,19 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
             </button>
           </div>
         )}
+
+        <div className="form-field">
+          <label>Duplicate instance</label>
+          <div className="hint">
+            Makes a copy with its own worlds, mods, and settings (as last saved - unsaved changes above aren't
+            included), so you can try a new Minecraft version or mod set without touching this one.
+            {instance.kind === "server" &&
+              " A copied server keeps the same port and RCON settings, so don't run both at once."}
+          </div>
+          <button type="button" className="ghost-btn small" onClick={handleDuplicate} disabled={duplicating}>
+            {duplicating ? "Copying…" : "Duplicate"}
+          </button>
+        </div>
 
         <div className="modal-actions">
           <button className="ghost-btn" onClick={onClose}>

@@ -70,6 +70,16 @@ pub struct Settings {
     /// v1 only supports sharing a single instance at a time.
     #[serde(default)]
     pub remote_admin_instance_id: Option<String>,
+    /// UUIDs of the ops the owner has handed "full access" to, on top of
+    /// `remote_admin_enabled`: any console command, plus browsing and editing
+    /// *any* file in the shared server's folder (configs, world data,
+    /// `server.properties` - RCON password included). Empty by default - every
+    /// other admin only ever gets mods, resource packs, ops/whitelist/bans,
+    /// the moderation commands and the console view. Per-admin rather than a
+    /// single switch so the owner can trust some ops with the whole server
+    /// without trusting all of them.
+    #[serde(default)]
+    pub remote_admin_full_access_uuids: Vec<String>,
     /// Which layout `InstanceDetail`/`RemoteInstanceDetail` use for the area
     /// below the header - `false` (default) is the padded/boxed look local
     /// instances have always had; `true` removes that padding for a more
@@ -98,6 +108,7 @@ impl Default for Settings {
             remote_admin_enabled: false,
             remote_admin_port: default_remote_admin_port(),
             remote_admin_instance_id: None,
+            remote_admin_full_access_uuids: Vec::new(),
             spacious_instance_view: false,
         }
     }

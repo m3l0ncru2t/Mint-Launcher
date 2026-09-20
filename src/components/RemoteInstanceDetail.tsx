@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parseChatLines } from "../chatParser";
 import { useAutoFollow } from "../hooks/useAutoFollow";
+import { isMintPollLine } from "../lib/consoleFilter";
 import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
@@ -26,7 +27,7 @@ interface Props {
   spaciousView: boolean;
 }
 
-type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players";
+type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players" | "files";
 
 /// A parallel, remote-only detail view rather than a "local vs. remote"
 /// branch threaded through InstanceDetail/ServerConsolePanel/PlayersPanel -
@@ -42,6 +43,15 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
   const [tab, setTab] = useState<Tab>("console");
   const [iconUrl, setIconUrl] = useState<string | null>(null);
   const [running, setRunning] = useState<boolean | null>(null);
+  // Owner-controlled (Settings > Remote Admin on the host) - gates the raw
+  // console input and the Files tab, which the host refuses otherwise.
+  const [fullAccess, setFullAccess] = useState(false);
+
+  // The owner can switch full access off while an admin is mid-session - fall
+  // back to the console rather than leaving a blank Files tab selected.
+  useEffect(() => {
+    if (!fullAccess && tab === "files") setTab("console");
+  }, [fullAccess, tab]);
   const [players, setPlayers] = useState<{ online: number; max: number; sample: PlayerSample[] } | null>(null);
   const [stats, setStats] = useState<{
     cpuPercent: number;
@@ -79,7 +89,11 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
     function poll() {
       api
         .getStatus()
-        .then((status) => !cancelled && setRunning(status.running))
+        .then((status) => {
+          if (cancelled) return;
+          setRunning(status.running);
+          setFullAccess(!!status.fullAccess);
+        })
         .catch(() => !cancelled && setRunning(false));
     }
     poll();
@@ -369,13 +383,24 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             <button className={`files-tab${tab === "players" ? " active" : ""}`} onClick={() => setTab("players")}>
               Players
             </button>
+            {fullAccess && (
+              <button className={`files-tab${tab === "files" ? " active" : ""}`} onClick={() => setTab("files")}>
+                Files
+              </button>
+            )}
           </div>
           {tab === "mods" && <RemoteModsTab link={link} onTokenRefreshed={onTokenRefreshed} />}
           {tab === "resourcepacks" && <RemoteResourcePacksTab link={link} onTokenRefreshed={onTokenRefreshed} />}
           {tab === "console" && (
-            <RemoteConsoleTab link={link} isRunning={!!running} onTokenRefreshed={onTokenRefreshed} />
+            <RemoteConsoleTab
+              link={link}
+              isRunning={!!running}
+              fullAccess={fullAccess}
+              onTokenRefreshed={onTokenRefreshed}
+            />
           )}
           {tab === "chat" && <RemoteChatTab link={link} onTokenRefreshed={onTokenRefreshed} />}
+          {tab === "files" && fullAccess && <RemoteFilesTab link={link} onTokenRefreshed={onTokenRefreshed} />}
           {tab === "players" && (
             <RemotePlayersTab link={link} onTokenRefreshed={onTokenRefreshed} players={players} running={running} />
           )}
@@ -821,13 +846,32 @@ function RemoteResourcePacksTab({
 function RemoteConsoleTab({
   link,
   isRunning,
+  fullAccess,
   onTokenRefreshed,
 }: {
   link: RemoteServerLink;
   isRunning: boolean;
+  fullAccess: boolean;
   onTokenRefreshed: (token: string) => void;
 }) {
   const api = remoteApi(link, onTokenRefreshed);
+  const [command, setCommand] = useState("");
+  const [sendingCommand, setSendingCommand] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
+
+  async function handleSendCommand() {
+    if (!command.trim()) return;
+    setSendingCommand(true);
+    setCommandError(null);
+    try {
+      await api.sendCommand(command.trim());
+      setCommand("");
+    } catch (e) {
+      setCommandError(String(e).replace(/^Error: /, ""));
+    } finally {
+      setSendingCommand(false);
+    }
+  }
   const [lines, setLines] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
 
@@ -849,10 +893,16 @@ function RemoteConsoleTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
-  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(lines);
+  // Hides the host's own `list`/`time query gametime` polling responses,
+  // same as the local console does (see lib/consoleFilter) - the host
+  // streams its raw console, so without this a remote admin sees that
+  // player-count/TPS/MSPT polling noise every few seconds.
+  const displayLines = useMemo(() => lines.filter((line) => !isMintPollLine(line)), [lines]);
+
+  const { ref: logRef, autoFollow, setAutoFollow, onScroll } = useAutoFollow<HTMLDivElement>(displayLines);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(lines.join("\n"));
+    await navigator.clipboard.writeText(displayLines.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -869,20 +919,42 @@ function RemoteConsoleTab({
           >
             Auto-follow
           </button>
-          <button className="ghost-btn small" onClick={handleCopy} disabled={lines.length === 0}>
+          <button className="ghost-btn small" onClick={handleCopy} disabled={displayLines.length === 0}>
             {copied ? "Copied!" : "Copy"}
           </button>
         </div>
       </div>
       <div className="log-console" ref={logRef} onScroll={onScroll}>
-        {lines.length > 0 ? (
-          lines.map((line, i) => <div key={i}>{line}</div>)
+        {displayLines.length > 0 ? (
+          displayLines.map((line, i) => <div key={i}>{line}</div>)
         ) : (
           <span className="placeholder">
             {isRunning ? "Waiting for console output…" : "Server output will appear here once it's running."}
           </span>
         )}
       </div>
+      {commandError && <div className="error-text">{commandError}</div>}
+      {isRunning && fullAccess && (
+        <div className="server-command-bar">
+          <input
+            type="text"
+            placeholder="Type a server command…"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSendCommand();
+            }}
+            disabled={sendingCommand}
+          />
+          <button
+            className="ghost-btn small"
+            onClick={handleSendCommand}
+            disabled={sendingCommand || !command.trim()}
+          >
+            Send
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -1164,5 +1236,186 @@ function RemotePlayersTab({
         </div>
       ))}
     </div>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/// Read-only browser for the whole server folder - only works when the host's
+/// owner turned on "full access" for admins (see Settings > Remote Admin on
+/// the host); otherwise the host answers 403 and that message is shown as-is.
+function RemoteFilesTab({
+  link,
+  onTokenRefreshed,
+}: {
+  link: RemoteServerLink;
+  onTokenRefreshed: (token: string) => void;
+}) {
+  const api = remoteApi(link, onTokenRefreshed);
+  const [segments, setSegments] = useState<string[]>([]);
+  const [entries, setEntries] = useState<{ name: string; isDir: boolean; size: number }[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<{
+    name: string;
+    path: string;
+    content: string;
+    size: number;
+    truncated: boolean;
+    editable: boolean;
+  } | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [opening, setOpening] = useState<string | null>(null);
+
+  const currentPath = segments.join("/");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEntries(null);
+    setError(null);
+    setViewing(null);
+    api
+      .listFiles(currentPath)
+      .then((list) => !cancelled && setEntries(list))
+      .catch((e) => !cancelled && setError(String(e).replace(/^Error: /, "")));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.id, currentPath]);
+
+  async function openFile(name: string) {
+    setOpening(name);
+    setError(null);
+    try {
+      const path = currentPath ? `${currentPath}/${name}` : name;
+      const file = await api.readFile(path);
+      setDraft(null);
+      setViewing({ name, path, ...file });
+    } catch (e) {
+      setError(String(e).replace(/^Error: /, ""));
+    } finally {
+      setOpening(null);
+    }
+  }
+
+  async function saveDraft() {
+    if (!viewing || draft === null) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.writeFile(viewing.path, draft);
+      setViewing({ ...viewing, content: draft, size: new Blob([draft]).size });
+      setDraft(null);
+    } catch (e) {
+      setError(String(e).replace(/^Error: /, ""));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (viewing) {
+    const editing = draft !== null;
+    return (
+      <>
+        <div className="panel-header">
+          <h4>{viewing.name}</h4>
+          <span className="hint-inline">
+            {formatFileSize(viewing.size)}
+            {viewing.truncated ? " - showing the last 2 MB (too large to edit)" : ""}
+            {!viewing.editable && !viewing.truncated ? " - not editable" : ""}
+          </span>
+          <div className="panel-actions">
+            {editing ? (
+              <>
+                <button className="primary-btn small" onClick={saveDraft} disabled={saving}>
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button className="ghost-btn small" onClick={() => setDraft(null)} disabled={saving}>
+                  Discard
+                </button>
+              </>
+            ) : (
+              <>
+                {viewing.editable && (
+                  <button className="ghost-btn small" onClick={() => setDraft(viewing.content)}>
+                    Edit
+                  </button>
+                )}
+                <button className="ghost-btn small" onClick={() => setViewing(null)}>
+                  Back
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        {error && <div className="error-text">{error}</div>}
+        {editing ? (
+          <textarea
+            className="config-editor-textarea"
+            value={draft}
+            spellCheck={false}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        ) : (
+          <div className="log-console">{viewing.content}</div>
+        )}
+        {editing && (
+          <div className="hint">Saved straight to the host's file. Most config changes need a server restart.</div>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="panel-header">
+        <h4>
+          <a style={{ cursor: "pointer" }} onClick={() => setSegments([])}>
+            Server files
+          </a>
+          {segments.map((seg, i) => (
+            <span key={i}>
+              {" / "}
+              <a style={{ cursor: "pointer" }} onClick={() => setSegments(segments.slice(0, i + 1))}>
+                {seg}
+              </a>
+            </span>
+          ))}
+        </h4>
+        <div className="panel-actions">
+          {segments.length > 0 && (
+            <button className="ghost-btn small" onClick={() => setSegments(segments.slice(0, -1))}>
+              Up
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="mods-list">
+        {error && <div className="error-text">{error}</div>}
+        {!error && entries === null && <div className="placeholder">Loading…</div>}
+        {entries?.length === 0 && <div className="placeholder">This folder is empty.</div>}
+        {entries?.map((entry) => (
+          <div
+            key={entry.name}
+            className="mod-row"
+            onClick={() => (entry.isDir ? setSegments([...segments, entry.name]) : openFile(entry.name))}
+          >
+            <div className="mod-name-block">
+              <span className="mod-name">
+                {entry.name}
+                {entry.isDir ? "/" : ""}
+              </span>
+            </div>
+            {opening === entry.name && <span className="spinner-small" />}
+            {!entry.isDir && <span className="mod-size">{formatFileSize(entry.size)}</span>}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }

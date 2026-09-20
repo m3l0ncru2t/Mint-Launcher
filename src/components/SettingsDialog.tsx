@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { SkinCapeDialog } from "./SkinCapeDialog";
 import { BACKGROUND_THEMES } from "../themes";
-import type { CustomBackgroundInfo, GameProfile, Instance, Settings } from "../types";
+import type { CustomBackgroundInfo, GameProfile, Instance, OpEntry, Settings } from "../types";
 
 interface Props {
   profile: GameProfile | null;
@@ -20,6 +20,7 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const [customThumbs, setCustomThumbs] = useState<Record<string, string>>({});
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [sharedOps, setSharedOps] = useState<OpEntry[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const opacitySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -27,6 +28,26 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const activePreset = BACKGROUND_THEMES.find((t) => t.id === activeThemeKey);
   const activeOpacity =
     settings.themeOpacity[activeThemeKey] ?? activePreset?.defaultOpacity ?? { sidebar: 0.82, modsPanel: 0.82 };
+
+  // The shared server's operators - the only people who can connect as
+  // remote admins at all (see remote_api's login), so they're who "full
+  // access" is chosen from.
+  useEffect(() => {
+    const id = settings.remoteAdminInstanceId;
+    if (!id) {
+      setSharedOps(null);
+      return;
+    }
+    let cancelled = false;
+    setSharedOps(null);
+    api
+      .getOps(id)
+      .then((ops) => !cancelled && setSharedOps(ops))
+      .catch(() => !cancelled && setSharedOps([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.remoteAdminInstanceId]);
 
   useEffect(() => {
     api
@@ -420,6 +441,51 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
                   ))}
               </select>
             </div>
+
+            {settings.remoteAdminInstanceId && (
+              <div style={{ marginTop: 10 }}>
+                <label>Full access</label>
+                <div className="hint">
+                  Ops you tick here can type any console command (everyone else only gets the kick/ban/op/whitelist
+                  actions in the Players and Chat tabs) and get a Files tab to browse and edit anything in the
+                  server's folder - configs, logs, world data - including <b>server.properties</b> (RCON password
+                  included). Only tick ops you'd trust with the whole server.
+                </div>
+                {sharedOps === null ? (
+                  <div className="hint">Loading operators…</div>
+                ) : sharedOps.length === 0 ? (
+                  <div className="hint">This server has no operators yet - add one from its Players tab.</div>
+                ) : (
+                  sharedOps.map((op) => {
+                    const normalize = (u: string) => u.replace(/-/g, "").toLowerCase();
+                    const granted = settings.remoteAdminFullAccessUuids.some((u) => normalize(u) === normalize(op.uuid));
+                    return (
+                      <label key={op.uuid} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={granted}
+                          disabled={busy}
+                          onChange={async (e) => {
+                            const enabled = e.target.checked;
+                            setBusy(true);
+                            setError(null);
+                            try {
+                              const uuids = await api.setRemoteAdminFullAccess(op.uuid, enabled);
+                              onSettingsChange({ ...settings, remoteAdminFullAccessUuids: uuids });
+                            } catch (err) {
+                              setError(String(err));
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        />
+                        {op.name}
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            )}
 
             <div style={{ marginTop: 10 }}>
               <label htmlFor="remote-admin-port">Port</label>

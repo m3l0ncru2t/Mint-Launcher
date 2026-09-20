@@ -133,6 +133,7 @@ export interface Settings {
   remoteAdminEnabled: boolean;
   remoteAdminPort: number;
   remoteAdminInstanceId: string | null;
+  remoteAdminFullAccessUuids: string[];
   spaciousInstanceView: boolean;
 }
 

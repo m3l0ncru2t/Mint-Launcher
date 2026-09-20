@@ -194,6 +194,7 @@ export const api = {
   getServerIcon: (id: string) => invoke<string | null>("get_server_icon", { id }),
 
   exportInstance: (id: string, destPath: string) => invoke<void>("export_instance", { id, destPath }),
+  duplicateInstance: (id: string) => invoke<Instance>("duplicate_instance", { id }),
 
   importInstance: (sourcePath: string) => invoke<Instance>("import_instance", { sourcePath }),
 
@@ -226,6 +227,10 @@ export const api = {
 
   setRemoteAdminInstance: (instanceId: string | null) =>
     invoke<void>("set_remote_admin_instance", { instanceId }),
+
+  /** Grants/revokes one op's full access; resolves to the updated list of granted UUIDs. */
+  setRemoteAdminFullAccess: (uuid: string, enabled: boolean) =>
+    invoke<string[]>("set_remote_admin_full_access", { uuid, enabled }),
 
   setSpaciousInstanceView: (enabled: boolean) => invoke<void>("set_spacious_instance_view", { enabled }),
 

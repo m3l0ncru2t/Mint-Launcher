@@ -66,6 +66,23 @@ pub async fn set_remote_admin_port(state: State<'_, AppState>, port: u16) -> Res
 }
 
 #[tauri::command]
+pub async fn set_remote_admin_full_access(
+    state: State<'_, AppState>,
+    uuid: String,
+    enabled: bool,
+) -> Result<Vec<String>, String> {
+    let mut current = state.settings.lock().await;
+    let normalize = |u: &str| u.replace('-', "").to_lowercase();
+    current.remote_admin_full_access_uuids.retain(|u| normalize(u) != normalize(&uuid));
+    if enabled {
+        current.remote_admin_full_access_uuids.push(uuid);
+    }
+    let updated = current.remote_admin_full_access_uuids.clone();
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())?;
+    Ok(updated)
+}
+
+#[tauri::command]
 pub async fn set_remote_admin_instance(state: State<'_, AppState>, instance_id: Option<String>) -> Result<(), String> {
     let mut current = state.settings.lock().await;
     current.remote_admin_instance_id = instance_id;

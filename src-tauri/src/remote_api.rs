@@ -32,7 +32,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/auth/login", post(login))
         .route("/instance", get(get_instance))
         .route("/icon", get(icon))
-        .route("/mods", get(list_mods).post(upload_mod))
+        .route("/mods", get(list_mods).post(upload_mod).layer(upload_body_limit()))
         .route("/mods/{file_name}", delete(delete_mod))
         .route("/mods/{file_name}/info", get(mod_info))
         .route("/mods/{file_name}/toggle", post(toggle_mod))
@@ -40,7 +40,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/mods/updates/apply", post(apply_mod_update))
         .route("/mods/search", get(search_mods))
         .route("/mods/install", post(install_mod))
-        .route("/resourcepacks", get(list_resourcepacks).post(upload_resourcepack))
+        .route("/resourcepacks", get(list_resourcepacks).post(upload_resourcepack).layer(upload_body_limit()))
         .route("/resourcepacks/{file_name}", delete(delete_resourcepack))
         .route("/resourcepacks/{file_name}/toggle", post(toggle_resourcepack))
         .route("/resourcepacks/updates", get(resourcepack_updates))
@@ -53,6 +53,13 @@ fn build_router(app: AppHandle) -> Router {
         .route("/stats", get(stats))
         .route("/players", get(players))
         .route("/command", post(send_command))
+        .route("/files", get(list_files))
+        .route(
+            "/files/content",
+            get(read_file)
+                .put(write_file)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
         .route("/ops", get(list_ops).post(add_op))
         .route("/ops/{name}", delete(remove_op))
         .route("/whitelist", get(list_whitelist).post(add_whitelist))
@@ -416,6 +423,16 @@ async fn apply_mod_update(
 /// misbehaving/malicious upload can't fill the disk.
 const MAX_MOD_UPLOAD_BYTES: usize = 300 * 1024 * 1024;
 
+/// Axum caps every request body at 2MB by default, *before* a handler ever
+/// runs - so the 300MB check inside the upload handlers never got a chance,
+/// and any jar over 2MB failed with a 413. Raised only on the two upload
+/// routes (with a little headroom for the multipart framing), so every other
+/// route - `/auth/login` included, which is reachable before any auth - keeps
+/// the small default.
+fn upload_body_limit() -> axum::extract::DefaultBodyLimit {
+    axum::extract::DefaultBodyLimit::max(MAX_MOD_UPLOAD_BYTES + 1024 * 1024)
+}
+
 async fn upload_mod(
     State(app): State<AppHandle>,
     headers: HeaderMap,
@@ -636,6 +653,11 @@ async fn stream_console(app: AppHandle, instance_id: String, mut socket: WebSock
 #[serde(rename_all = "camelCase")]
 struct StatusInfo {
     running: bool,
+    /// Whether the owner gave *this* admin full access (see `Settings.
+    /// remote_admin_full_access_uuids`) - lets their UI show the raw console
+    /// input and Files tab only when they'd actually work, rather than
+    /// offering controls that just answer 403.
+    full_access: bool,
 }
 
 /// The authoritative "is it running" signal `running_instances` already is
@@ -645,11 +667,12 @@ struct StatusInfo {
 /// would otherwise wrongly report "stopped" for a server that's genuinely
 /// running but lost its console link to an app restart.
 async fn status(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<StatusInfo>, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     let running = state.running_instances.lock().await.contains_key(&id);
-    Ok(Json(StatusInfo { running }))
+    let full_access = has_full_access(&app, &session).await;
+    Ok(Json(StatusInfo { running, full_access }))
 }
 
 #[derive(Debug, Serialize)]
@@ -713,6 +736,10 @@ async fn players(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
+/// What the remote Players/Chat tabs send on their own - always allowed for
+/// any op admin. See `send_command`.
+const MODERATION_COMMANDS: &[&str] = &["kick", "ban", "ban-ip", "pardon", "pardon-ip", "op", "deop", "whitelist"];
+
 #[derive(Debug, Deserialize)]
 struct CommandRequest {
     command: String,
@@ -728,12 +755,222 @@ async fn send_command(
     headers: HeaderMap,
     Json(body): Json<CommandRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    // Every admin gets the moderation commands the Players/Chat tabs use;
+    // anything else typed into a raw console (`stop`, `gamerule`, `execute`,
+    // `save-off`, ...) needs the owner's full-access switch.
+    let verb = body.command.trim_start().trim_start_matches('/').split_whitespace().next().unwrap_or("").to_lowercase();
+    if !MODERATION_COMMANDS.contains(&verb.as_str()) {
+        require_full_access(&app, &session).await?;
+    }
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::launch::send_instance_command(state, id, body.command)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether the owner handed *this* admin full access (see `Settings.
+/// remote_admin_full_access_uuids`) and they're still an op on the shared
+/// server - checked per request rather than baked into the session, so
+/// revoking either one takes effect immediately for an already-connected
+/// admin without restarting the API or waiting out their session.
+async fn has_full_access(app: &AppHandle, session: &RemoteSession) -> bool {
+    let normalize = |u: &str| u.replace('-', "").to_lowercase();
+    let state = app.state::<AppState>();
+    let granted = state
+        .settings
+        .lock()
+        .await
+        .remote_admin_full_access_uuids
+        .iter()
+        .any(|u| normalize(u) == normalize(&session.uuid));
+    if !granted {
+        return false;
+    }
+    let Ok((inst, _)) = shared_instance(app).await else {
+        return false;
+    };
+    crate::minecraft::server_admin::read_ops(&inst.game_dir(&state.instances_dir()))
+        .iter()
+        .any(|o| normalize(&o.uuid) == normalize(&session.uuid))
+}
+
+async fn require_full_access(app: &AppHandle, session: &RemoteSession) -> Result<(), ApiError> {
+    if has_full_access(app, session).await {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            "The server owner hasn't given you full access".to_string(),
+        ))
+    }
+}
+
+/// Resolves a client-supplied relative path against the server folder,
+/// refusing anything that could land outside it: `..`, absolute paths and
+/// drive prefixes are rejected outright, and the final canonicalized path
+/// (symlinks resolved) must still sit under the canonicalized root.
+fn resolve_server_path(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, ApiError> {
+    use std::path::Component;
+    let root = root
+        .canonicalize()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut path = root.clone();
+    for component in std::path::Path::new(rel).components() {
+        match component {
+            Component::Normal(part) => path.push(part),
+            Component::CurDir => {}
+            _ => return Err((StatusCode::BAD_REQUEST, "Invalid path".to_string())),
+        }
+    }
+    let resolved = path
+        .canonicalize()
+        .map_err(|_| (StatusCode::NOT_FOUND, "No such file or folder".to_string()))?;
+    if !resolved.starts_with(&root) {
+        return Err((StatusCode::FORBIDDEN, "That path is outside the server folder".to_string()));
+    }
+    Ok(resolved)
+}
+
+#[derive(Debug, Deserialize)]
+struct FilesQuery {
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileEntry {
+    name: String,
+    is_dir: bool,
+    size: u64,
+}
+
+const MAX_LISTED_ENTRIES: usize = 5000;
+/// Larger files are cut down to their *last* this-many bytes (the useful end
+/// of a growing log) rather than refused or streamed whole to a text viewer.
+const MAX_VIEW_BYTES: u64 = 2 * 1024 * 1024;
+
+async fn list_files(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Query(q): Query<FilesQuery>,
+) -> Result<Json<Vec<FileEntry>>, ApiError> {
+    let session = require_session(&app, &headers).await?;
+    require_full_access(&app, &session).await?;
+    let (inst, _) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    let dir = resolve_server_path(&inst.game_dir(&state.instances_dir()), &q.path)?;
+    if !dir.is_dir() {
+        return Err((StatusCode::BAD_REQUEST, "Not a folder".to_string()));
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .flatten()
+        .take(MAX_LISTED_ENTRIES)
+    {
+        // Follows symlinks (metadata, not file_type) so a link to a folder
+        // inside the server shows as a folder - anything it points outside
+        // the server folder is still refused when actually opened.
+        let Ok(meta) = std::fs::metadata(entry.path()) else {
+            continue;
+        };
+        entries.push(FileEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            is_dir: meta.is_dir(),
+            size: if meta.is_dir() { 0 } else { meta.len() },
+        });
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(Json(entries))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileContent {
+    content: String,
+    size: u64,
+    /// True when `content` is only the tail of a file bigger than
+    /// `MAX_VIEW_BYTES`.
+    truncated: bool,
+    /// Whether saving an edit back would be lossless: the whole file was
+    /// read and it's valid UTF-8 (a lossy decode would silently mangle
+    /// other bytes on write).
+    editable: bool,
+}
+
+async fn read_file(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Query(q): Query<FilesQuery>,
+) -> Result<Json<FileContent>, ApiError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let session = require_session(&app, &headers).await?;
+    require_full_access(&app, &session).await?;
+    let (inst, _) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    let path = resolve_server_path(&inst.game_dir(&state.instances_dir()), &q.path)?;
+    if !path.is_file() {
+        return Err((StatusCode::BAD_REQUEST, "Not a file".to_string()));
+    }
+    let io_err = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let mut file = std::fs::File::open(&path).map_err(io_err)?;
+    let size = file.metadata().map_err(io_err)?.len();
+    let truncated = size > MAX_VIEW_BYTES;
+    if truncated {
+        file.seek(SeekFrom::Start(size - MAX_VIEW_BYTES)).map_err(io_err)?;
+    }
+    let mut data = Vec::new();
+    file.take(MAX_VIEW_BYTES).read_to_end(&mut data).map_err(io_err)?;
+    // A NUL byte early on is a reliable "this isn't text" signal (jars, world
+    // region files, images) - nothing useful to show in a text viewer.
+    if data.iter().take(8192).any(|b| *b == 0) {
+        return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "This looks like a binary file".to_string()));
+    }
+    let editable = !truncated && std::str::from_utf8(&data).is_ok();
+    Ok(Json(FileContent {
+        content: String::from_utf8_lossy(&data).into_owned(),
+        size,
+        truncated,
+        editable,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct WriteFileRequest {
+    path: String,
+    content: String,
+}
+
+/// Overwrites an *existing* text file - configs, `server.properties`,
+/// ops/whitelist json and the like. Deliberately can't create files or touch
+/// anything that isn't plain UTF-8 text (jars, world data), so a mistaken
+/// save can't corrupt something the text viewer couldn't have shown anyway.
+async fn write_file(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<WriteFileRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = require_session(&app, &headers).await?;
+    require_full_access(&app, &session).await?;
+    let (inst, _) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    let path = resolve_server_path(&inst.game_dir(&state.instances_dir()), &body.path)?;
+    if !path.is_file() {
+        return Err((StatusCode::BAD_REQUEST, "Not an existing file".to_string()));
+    }
+    if body.content.len() as u64 > MAX_VIEW_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "File is too large to edit here".to_string()));
+    }
+    let io_err = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let existing = std::fs::read(&path).map_err(io_err)?;
+    if existing.len() as u64 > MAX_VIEW_BYTES || std::str::from_utf8(&existing).is_err() || existing.contains(&0) {
+        return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only plain text files can be edited".to_string()));
+    }
+    std::fs::write(&path, body.content.as_bytes()).map_err(io_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
