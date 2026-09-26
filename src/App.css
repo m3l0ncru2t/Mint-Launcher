@@ -48,6 +48,7 @@ button {
 .app-shell {
   display: grid;
   grid-template-columns: 260px 1fr;
+  grid-template-rows: minmax(0, 1fr) auto;
   height: 100vh;
   overflow: hidden;
 }
@@ -2259,4 +2260,28 @@ button {
 .server-address-meta {
   user-select: text;
   margin-top: 2px;
+}
+
+.app-status-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 12px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-1, rgba(0, 0, 0, 0.35));
+  border-top: 1px solid var(--border);
+}
+
+.app-status-update {
+  background: var(--mint-500);
+  color: #062b1a;
+  border: none;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
 }

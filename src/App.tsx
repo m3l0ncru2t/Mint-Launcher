@@ -16,6 +16,7 @@ import { ModCompatDialog } from "./components/ModCompatDialog";
 import { LoginScreen } from "./components/LoginScreen";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { AppStatusBar } from "./components/AppStatusBar";
 import { BACKGROUND_THEMES } from "./themes";
 import type {
   GameProfile,
@@ -312,6 +313,8 @@ export default function App() {
           <div className="main-empty">Select or create an instance to get started.</div>
         </div>
       )}
+
+      <AppStatusBar />
 
       {showCreate && (
         <CreateInstanceDialog

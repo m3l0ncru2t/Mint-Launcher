@@ -6,6 +6,22 @@ import type { PortableUpdateInfo } from "../types";
 
 type Status = "idle" | "downloading" | "installing" | "error";
 
+// The status bar's Update button (see AppStatusBar) talks to this banner
+// through window events, so there's one updater flow rather than two.
+export const UPDATE_AVAILABLE_EVENT = "mint-update-available";
+const START_UPDATE_EVENT = "mint-update-start";
+
+let availableVersion: string | null = null;
+/** The version the startup check found, for a listener that mounts late. */
+export function getAvailableUpdateVersion() {
+  return availableVersion;
+}
+
+/** Starts installing the available update (showing the banner's progress). */
+export function startUpdate() {
+  window.dispatchEvent(new Event(START_UPDATE_EVENT));
+}
+
 export function UpdateBanner() {
   const [portable, setPortable] = useState(false);
   const [update, setUpdate] = useState<Update | null>(null);
@@ -104,6 +120,25 @@ export function UpdateBanner() {
   }
 
   const version = portable ? portableUpdate?.version : update?.version;
+
+  useEffect(() => {
+    if (!version) return;
+    availableVersion = version;
+    window.dispatchEvent(new CustomEvent<string>(UPDATE_AVAILABLE_EVENT, { detail: version }));
+  }, [version]);
+
+  // Latest handleUpdate for the event listener below (it closes over state).
+  const handleUpdateRef = useRef(handleUpdate);
+  handleUpdateRef.current = handleUpdate;
+  useEffect(() => {
+    const onStart = () => {
+      setDismissed(false);
+      if (status === "idle" || status === "error") handleUpdateRef.current();
+    };
+    window.addEventListener(START_UPDATE_EVENT, onStart);
+    return () => window.removeEventListener(START_UPDATE_EVENT, onStart);
+  }, [status]);
+
   if (!version || dismissed) return null;
 
   return (
