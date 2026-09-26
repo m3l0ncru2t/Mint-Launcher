@@ -9,7 +9,7 @@ pub fn suggest_launcher_paths() -> Vec<SuggestedPath> {
     importer::suggest_paths()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn scan_external_launcher(path: String) -> Result<Vec<ImportCandidate>, String> {
     importer::scan(std::path::Path::new(&path)).map_err(|e| e.to_string())
 }

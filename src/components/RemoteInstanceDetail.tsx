@@ -5,6 +5,7 @@ import { isMintPollLine } from "../lib/consoleFilter";
 import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
+import { ServerInfoPanel } from "./ServerInfoPanel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
 import { RemoteBrowseModsDialog } from "./RemoteBrowseModsDialog";
@@ -19,6 +20,7 @@ import type {
   ResourcePackFile,
   WhitelistEntry,
 } from "../types";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 interface Props {
   link: RemoteServerLink;
@@ -27,7 +29,7 @@ interface Props {
   spaciousView: boolean;
 }
 
-type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players" | "files";
+type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players" | "server" | "files";
 
 /// A parallel, remote-only detail view rather than a "local vs. remote"
 /// branch threaded through InstanceDetail/ServerConsolePanel/PlayersPanel -
@@ -97,10 +99,10 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         .catch(() => !cancelled && setRunning(false));
     }
     poll();
-    const interval = setInterval(poll, 5000);
+    const stopInterval = setVisibleInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
@@ -120,10 +122,10 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         .catch(() => !cancelled && setPlayers(null));
     }
     poll();
-    const interval = setInterval(poll, 5000);
+    const stopInterval = setVisibleInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id, running]);
@@ -146,10 +148,10 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         .catch(() => !cancelled && setStats(null));
     }
     poll();
-    const interval = setInterval(poll, 3000);
+    const stopInterval = setVisibleInterval(poll, 3000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id, running]);
@@ -197,7 +199,7 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         <div className="instance-header-text">
           <h2>{link.name}</h2>
           <div className="meta">
-            {link.versionId} · {link.loader} · {link.host}:{link.port}
+            {link.versionId} · {link.loader}{link.nodeId ? "" : ` · ${link.host}:${link.port}`}
           </div>
         </div>
         <div className="instance-header-actions">
@@ -383,6 +385,9 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             <button className={`files-tab${tab === "players" ? " active" : ""}`} onClick={() => setTab("players")}>
               Players
             </button>
+            <button className={`files-tab${tab === "server" ? " active" : ""}`} onClick={() => setTab("server")}>
+              Server
+            </button>
             {fullAccess && (
               <button className={`files-tab${tab === "files" ? " active" : ""}`} onClick={() => setTab("files")}>
                 Files
@@ -400,6 +405,14 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             />
           )}
           {tab === "chat" && <RemoteChatTab link={link} onTokenRefreshed={onTokenRefreshed} />}
+          {tab === "server" && (
+            <ServerInfoPanel
+              instanceId={link.id}
+              isRunning={!!running}
+              remote
+              load={() => remoteApi(link, onTokenRefreshed).getServerInfo()}
+            />
+          )}
           {tab === "files" && fullAccess && <RemoteFilesTab link={link} onTokenRefreshed={onTokenRefreshed} />}
           {tab === "players" && (
             <RemotePlayersTab link={link} onTokenRefreshed={onTokenRefreshed} players={players} running={running} />
@@ -487,8 +500,8 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
     // without this, this view would only notice on its own next manual
     // action. Quiet (no spinner, no Modrinth re-check) since it's just
     // keeping the list itself in sync.
-    const interval = setInterval(() => load(false, false), 5000);
-    return () => clearInterval(interval);
+    const stopInterval = setVisibleInterval(() => load(false, false), 5000);
+    return () => stopInterval();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
@@ -1043,6 +1056,7 @@ function RemotePlayersTab({
   const api = remoteApi(link, onTokenRefreshed);
   const [ops, setOps] = useState<OpEntry[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
+  const [whitelistOn, setWhitelistOn] = useState<boolean | null>(null);
   const [bans, setBans] = useState<BannedPlayerEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -1050,13 +1064,14 @@ function RemotePlayersTab({
   function refreshLists() {
     api.getOps().then(setOps).catch(() => {});
     api.getWhitelist().then(setWhitelist).catch(() => {});
+    api.getWhitelistEnabled().then(setWhitelistOn).catch(() => {});
     api.getBannedPlayers().then(setBans).catch(() => {});
   }
 
   useEffect(() => {
     refreshLists();
-    const interval = setInterval(refreshLists, 5000);
-    return () => clearInterval(interval);
+    const stopInterval = setVisibleInterval(refreshLists, 5000);
+    return () => stopInterval();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link.id]);
 
@@ -1102,6 +1117,13 @@ function RemotePlayersTab({
 
   function handleRemoveOp(name: string) {
     run(`remove-op-${name}`, () => (isRunning ? api.sendCommand(`deop ${name}`) : api.removeOpEntry(name)));
+  }
+
+  function handleToggleWhitelist(enabled: boolean) {
+    run("toggle-whitelist", async () => {
+      await api.setWhitelistEnabled(enabled);
+      setWhitelistOn(enabled);
+    });
   }
 
   function handleAddWhitelist(username: string) {
@@ -1175,6 +1197,17 @@ function RemotePlayersTab({
 
       <div className="panel-header players-section-header">
         <h4>Whitelist{whitelist.length > 0 ? ` (${whitelist.length})` : ""}</h4>
+        {whitelistOn !== null && (
+          <label className="whitelist-toggle" title="Only whitelisted players can join while this is on">
+            <input
+              type="checkbox"
+              checked={whitelistOn}
+              disabled={busyAction === "toggle-whitelist"}
+              onChange={(e) => handleToggleWhitelist(e.target.checked)}
+            />
+            {whitelistOn ? "On" : "Off"}
+          </label>
+        )}
       </div>
       <AddByUsername placeholder="Add a username to the whitelist…" busy={!!busyAction} onAdd={handleAddWhitelist} />
       {whitelist.length === 0 && <div className="placeholder">Nobody's whitelisted.</div>}

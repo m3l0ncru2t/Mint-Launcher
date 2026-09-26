@@ -5,6 +5,7 @@ import { BrowseModsDialog } from "./BrowseModsDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ModInfoDialog } from "./ModInfoDialog";
 import type { ModFile, ModUpdateInfo } from "../types";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 interface Props {
   instanceId: string;
@@ -105,10 +106,10 @@ export function ModsPanel({ instanceId }: Props) {
     // instance's own mod list could sit stale indefinitely while it's the
     // one actually being looked at. Quiet (no spinner, no Modrinth re-check)
     // since it's just keeping the list itself in sync, not a user action.
-    const interval = setInterval(() => load(false, false), 5000);
+    const stopInterval = setVisibleInterval(() => load(false, false), 5000);
     return () => {
       window.removeEventListener("focus", onFocus);
-      clearInterval(interval);
+      stopInterval();
       unlistenChecked.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

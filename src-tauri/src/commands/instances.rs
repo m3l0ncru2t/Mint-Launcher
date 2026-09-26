@@ -131,7 +131,7 @@ pub struct ServerDetection {
 /// Live preview for `ImportServerDialog`: runs the same auto-detection
 /// `import_server_folder` itself relies on, so the dialog can show what was
 /// found (or why detection failed) before the user commits to importing.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn detect_server_instance(source_path: String) -> Result<ServerDetection, String> {
     let detection =
         server_instance::detect_server(std::path::Path::new(&source_path)).map_err(|e| e.to_string())?;
@@ -165,7 +165,7 @@ pub async fn import_server_folder(
     .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_instance(state: State<AppState>, id: String) -> Result<(), String> {
     instance::delete_instance(&state.instances_dir(), &id).map_err(|e| e.to_string())
 }
@@ -175,7 +175,7 @@ pub fn get_instance(state: State<AppState>, id: String) -> Result<Option<Instanc
     instance::get_instance(&state.instances_dir(), &id).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_mods(state: State<AppState>, id: String) -> Result<Vec<ModFile>, String> {
     let dir = resolve_mods_dir(&state, &id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -350,7 +350,7 @@ pub async fn update_instance_version(
 /// The curated `server.properties` settings surfaced in the UI - see
 /// `minecraft::server_properties` for how these are read/written without
 /// disturbing the rest of the file.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_server_properties(state: State<AppState>, id: String) -> Result<std::collections::HashMap<String, String>, String> {
     let inst = resolve_instance(&state, &id)?;
     if inst.kind != InstanceKind::Server {
@@ -373,19 +373,19 @@ pub fn save_server_properties(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_ops(state: State<AppState>, id: String) -> Result<Vec<crate::minecraft::server_admin::OpEntry>, String> {
     let inst = resolve_instance(&state, &id)?;
     Ok(crate::minecraft::server_admin::read_ops(&inst.game_dir(&state.instances_dir())))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_whitelist(state: State<AppState>, id: String) -> Result<Vec<crate::minecraft::server_admin::WhitelistEntry>, String> {
     let inst = resolve_instance(&state, &id)?;
     Ok(crate::minecraft::server_admin::read_whitelist(&inst.game_dir(&state.instances_dir())))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_banned_players(
     state: State<AppState>,
     id: String,
@@ -494,7 +494,7 @@ pub fn remove_instance_icon(state: State<AppState>, id: String) -> Result<Instan
     Ok(inst)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_instance_icon(state: State<AppState>, id: String) -> Result<Option<String>, String> {
     let inst = resolve_instance(&state, &id)?;
     let Ok(data) = std::fs::read(inst.icon_path(&state.instances_dir())) else {
@@ -511,7 +511,7 @@ pub fn get_instance_icon(state: State<AppState>, id: String) -> Result<Option<St
 /// instance's icon in the sidebar when the user hasn't set a custom one, so
 /// a server instance shows the icon it was actually configured with instead
 /// of a generic letter avatar.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_server_icon(state: State<AppState>, id: String) -> Result<Option<String>, String> {
     let inst = resolve_instance(&state, &id)?;
     let Ok(data) = std::fs::read(inst.game_dir(&state.instances_dir()).join("server-icon.png")) else {
@@ -724,7 +724,9 @@ pub async fn get_resourcepack_project_info(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+// `async` so the folder-pack size walk below runs off the main thread - it
+// recurses through every unzipped pack, and this runs on every window focus.
+#[tauri::command(async)]
 pub fn list_resourcepacks(state: State<AppState>, id: String) -> Result<Vec<ResourcePackFile>, String> {
     let inst = resolve_instance(&state, &id)?;
     let dir = inst.resourcepacks_dir(&state.instances_dir());
@@ -889,7 +891,7 @@ pub struct ConfigEntry {
 /// recursive tree view) - most mod configs sit directly in `config/`, and a
 /// per-mod subfolder still shows up (with its total size), just not
 /// browsable into yet.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_config_files(state: State<AppState>, id: String) -> Result<Vec<ConfigEntry>, String> {
     let dir = resolve_config_dir(&state, &id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -909,7 +911,7 @@ pub fn list_config_files(state: State<AppState>, id: String) -> Result<Vec<Confi
     Ok(entries)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_config_file(state: State<AppState>, id: String, file_name: String) -> Result<String, String> {
     let dir = resolve_config_dir(&state, &id)?;
     let path = safe_child(&dir, &file_name)?;
@@ -921,7 +923,7 @@ pub fn read_config_file(state: State<AppState>, id: String, file_name: String) -
     String::from_utf8(bytes).map_err(|_| "This file isn't plain text".to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_config_file(
     state: State<AppState>,
     id: String,
@@ -959,7 +961,7 @@ pub struct LogEntry {
     pub modified_at: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_log_files(state: State<AppState>, id: String) -> Result<Vec<LogEntry>, String> {
     let dir = resolve_logs_dir(&state, &id)?;
     let mut entries = Vec::new();
@@ -983,35 +985,52 @@ pub fn list_log_files(state: State<AppState>, id: String) -> Result<Vec<LogEntry
     Ok(entries)
 }
 
-fn tail_str(text: &str, max_bytes: usize) -> &str {
-    if text.len() <= max_bytes {
-        return text;
-    }
-    let mut start = text.len() - max_bytes;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    &text[start..]
-}
-
 /// Transparently decompresses a rotated `.log.gz` - Minecraft compresses
 /// every log but the current session's `latest.log` once it rotates out.
+///
+/// `async` + `spawn_blocking` rather than a plain sync command: those run on
+/// the main thread, and this is polled every couple of seconds (see the
+/// console/chat fallback for a server Mint doesn't hold the console of) - and
+/// a plain `latest.log` used to be read *whole* (then decoded and copied
+/// again) just to show its last few MB, so on a server that's been up for
+/// days every poll froze the window. A live `latest.log` now only reads its
+/// tail; a rotated `.gz` still has to be decompressed in full to find its end.
 #[tauri::command]
-pub fn read_log_file(state: State<AppState>, id: String, file_name: String) -> Result<String, String> {
+pub async fn read_log_file(state: State<'_, AppState>, id: String, file_name: String) -> Result<String, String> {
     let dir = resolve_logs_dir(&state, &id)?;
     let path = safe_child(&dir, &file_name)?;
-    let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let bytes = if file_name.to_lowercase().ends_with(".gz") {
+    let is_gz = file_name.to_lowercase().ends_with(".gz");
+    tauri::async_runtime::spawn_blocking(move || read_log_text(&path, is_gz))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_log_text(path: &std::path::Path, is_gz: bool) -> Result<String, String> {
+    use std::io::{Seek, SeekFrom};
+    let (bytes, truncated) = if is_gz {
+        let raw = std::fs::read(path).map_err(|e| e.to_string())?;
         let mut decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(raw));
         let mut out = Vec::new();
         decoder.read_to_end(&mut out).map_err(|e| e.to_string())?;
-        out
+        let truncated = out.len() > MAX_LOG_TEXT_BYTES;
+        if truncated {
+            out.drain(..out.len() - MAX_LOG_TEXT_BYTES);
+        }
+        (out, truncated)
     } else {
-        raw
+        let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let len = file.metadata().map_err(|e| e.to_string())?.len();
+        let start = len.saturating_sub(MAX_LOG_TEXT_BYTES as u64);
+        file.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity((len - start) as usize);
+        file.read_to_end(&mut out).map_err(|e| e.to_string())?;
+        (out, start > 0)
     };
     let text = String::from_utf8_lossy(&bytes);
-    if text.len() > MAX_LOG_TEXT_BYTES {
-        let tail = tail_str(&text, MAX_LOG_TEXT_BYTES);
+    if truncated {
+        // The cut usually lands mid-line (or mid-character) - drop that
+        // partial first line rather than showing a mangled fragment.
+        let tail = text.split_once('\n').map_or(text.as_ref(), |(_, rest)| rest);
         Ok(format!("(showing only the last {}MB of this log)\n…\n{tail}", MAX_LOG_TEXT_BYTES / (1024 * 1024)))
     } else {
         Ok(text.into_owned())
@@ -1023,4 +1042,146 @@ pub fn get_logs_dir(state: State<AppState>, id: String) -> Result<String, String
     let dir = resolve_logs_dir(&state, &id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().into_owned())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopPlayer {
+    pub name: String,
+    pub playtime_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerInfo {
+    pub local_ip: Option<String>,
+    pub port: u16,
+    pub level_name: String,
+    /// Players who have ever joined - one stats file per player in the world.
+    pub total_players_joined: usize,
+    pub total_playtime_seconds: u64,
+    pub top_players: Vec<TopPlayer>,
+    pub world_size_bytes: u64,
+    pub mod_count: usize,
+    pub op_count: usize,
+    pub whitelist_count: usize,
+    pub ban_count: usize,
+}
+
+/// The LAN address other machines on the network would use. Connecting a UDP
+/// socket only asks the OS which interface it would route through - nothing
+/// is sent.
+fn local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    Some(socket.local_addr().ok()?.ip().to_string())
+}
+
+fn dir_size(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+pub(crate) fn collect_server_info(inst: &Instance, instances_dir: &std::path::Path) -> ServerInfo {
+    let game_dir = inst.game_dir(instances_dir);
+    let props = crate::minecraft::server_properties::read_properties(&game_dir);
+    let level_name = props.get("level-name").cloned().unwrap_or_else(|| "world".to_string());
+    let port = props.get("server-port").and_then(|p| p.parse().ok()).unwrap_or(25565);
+    let world = game_dir.join(&level_name);
+
+    let names: std::collections::HashMap<String, String> =
+        std::fs::read_to_string(game_dir.join("usercache.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| Some((v.get("uuid")?.as_str()?.to_lowercase(), v.get("name")?.as_str()?.to_string())))
+            .collect();
+
+    let mut players: Vec<TopPlayer> = Vec::new();
+    let mut total_players_joined = 0;
+    if let Ok(entries) = std::fs::read_dir(world.join("stats")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            total_players_joined += 1;
+            let uuid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            let ticks = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| {
+                    let custom = v.get("stats")?.get("minecraft:custom")?;
+                    // Renamed from play_one_minute in 1.21.2.
+                    custom.get("minecraft:play_time").or_else(|| custom.get("minecraft:play_one_minute"))?.as_u64()
+                })
+                .unwrap_or(0);
+            players.push(TopPlayer {
+                name: names.get(&uuid).cloned().unwrap_or(uuid),
+                playtime_seconds: ticks / 20,
+            });
+        }
+    }
+    let total_playtime_seconds = players.iter().map(|p| p.playtime_seconds).sum();
+    players.sort_by(|a, b| b.playtime_seconds.cmp(&a.playtime_seconds));
+    players.truncate(5);
+
+    ServerInfo {
+        local_ip: local_ip(),
+        port,
+        level_name,
+        total_players_joined,
+        total_playtime_seconds,
+        top_players: players,
+        world_size_bytes: dir_size(&world),
+        mod_count: std::fs::read_dir(inst.mods_dir(instances_dir))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".jar")).count())
+            .unwrap_or(0),
+        op_count: crate::minecraft::server_admin::read_ops(&game_dir).len(),
+        whitelist_count: crate::minecraft::server_admin::read_whitelist(&game_dir).len(),
+        ban_count: crate::minecraft::server_admin::read_banned_players(&game_dir).len(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_server_info(state: State<'_, AppState>, id: String) -> Result<ServerInfo, String> {
+    let inst = resolve_instance(&state, &id)?;
+    if inst.kind != InstanceKind::Server {
+        return Err("This isn't a server instance".to_string());
+    }
+    let instances_dir = state.instances_dir();
+    tauri::async_runtime::spawn_blocking(move || collect_server_info(&inst, &instances_dir))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The machine's internet-facing address, as an outside service sees it.
+pub(crate) async fn lookup_public_ip(http: &reqwest::Client) -> Result<String, String> {
+    let text = http
+        .get("https://api.ipify.org")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|_| "Couldn't look up the public IP".to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ip = text.trim().to_string();
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err("Couldn't look up the public IP".to_string());
+    }
+    Ok(ip)
+}
+
+#[tauri::command]
+pub async fn get_public_ip(state: State<'_, AppState>) -> Result<String, String> {
+    lookup_public_ip(&state.http).await
 }

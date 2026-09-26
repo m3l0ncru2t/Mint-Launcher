@@ -199,6 +199,7 @@ pub async fn spawn_and_stream(
                 "accountUsername": profile.username,
             }),
         );
+        tokio::spawn(crate::game_icon::keep_applied(app.clone(), profile.uuid.clone(), pid));
         // The "launching" stage (emitted just before this in `do_launch`)
         // only covers the JVM's own startup time - without this, the
         // instance detail panel's activity card would otherwise be stuck

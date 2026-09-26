@@ -77,24 +77,34 @@ pub fn write_properties(game_dir: &Path, updates: &HashMap<String, String>) -> s
 /// `server.properties` edit.
 pub fn ensure_rcon_enabled(game_dir: &Path) -> std::io::Result<()> {
     let props = read_properties(game_dir);
-    if props.get("enable-rcon").is_some_and(|v| v != "true") {
+    // A server that has run even once has `enable-rcon=false` written into
+    // its properties by vanilla itself, alongside an empty password - that's
+    // the untouched default, not a choice, so it's treated as "not
+    // configured" (which is what left every already-run server without
+    // console access after a Mint restart). Only an explicit `false` next to
+    // a password someone actually set is honored as an opt-out.
+    let disabled = props.get("enable-rcon").is_some_and(|v| v != "true");
+    let has_password = props.get("rcon.password").is_some_and(|p| !p.is_empty());
+    if disabled && has_password {
         return Ok(());
     }
-    if props.contains_key("enable-rcon") && props.contains_key("rcon.port") && props.contains_key("rcon.password") {
+    if props.get("enable-rcon").is_some_and(|v| v == "true") && has_password && props.contains_key("rcon.port") {
         return Ok(());
     }
 
     let mut updates = HashMap::new();
-    if !props.contains_key("enable-rcon") {
-        updates.insert("enable-rcon".to_string(), "true".to_string());
-    }
-    if !props.contains_key("rcon.port") {
-        let base_port = props.get("server-port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(25565);
-        updates.insert("rcon.port".to_string(), pick_free_port(base_port.wrapping_add(10)).to_string());
-    }
-    if !props.contains_key("rcon.password") {
+    updates.insert("enable-rcon".to_string(), "true".to_string());
+    if !has_password {
         updates.insert("rcon.password".to_string(), uuid::Uuid::new_v4().simple().to_string());
     }
+    // Vanilla's default 25575 may already be taken by another server on this
+    // machine, so the port is re-picked from wherever it currently points.
+    let current_port = props.get("rcon.port").and_then(|p| p.parse::<u16>().ok());
+    let base_port = props.get("server-port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(25565);
+    updates.insert(
+        "rcon.port".to_string(),
+        pick_free_port(current_port.unwrap_or(base_port.wrapping_add(10))).to_string(),
+    );
     write_properties(game_dir, &updates)
 }
 

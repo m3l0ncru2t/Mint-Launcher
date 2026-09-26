@@ -80,6 +80,13 @@ pub struct Settings {
     /// without trusting all of them.
     #[serde(default)]
     pub remote_admin_full_access_uuids: Vec<String>,
+    /// "Mint Connect": also accept remote admin connections over the
+    /// built-in tunnel (see `tunnel.rs`), so admins can reach this machine
+    /// from anywhere with just a code - no VPN, no port forwarding. Off by
+    /// default since it makes the API reachable beyond the local network
+    /// (still login-gated by the Mojang handshake + ops list, like always).
+    #[serde(default)]
+    pub remote_admin_tunnel_enabled: bool,
     /// Which layout `InstanceDetail`/`RemoteInstanceDetail` use for the area
     /// below the header - `false` (default) is the padded/boxed look local
     /// instances have always had; `true` removes that padding for a more
@@ -109,6 +116,7 @@ impl Default for Settings {
             remote_admin_port: default_remote_admin_port(),
             remote_admin_instance_id: None,
             remote_admin_full_access_uuids: Vec::new(),
+            remote_admin_tunnel_enabled: false,
             spacious_instance_view: false,
         }
     }

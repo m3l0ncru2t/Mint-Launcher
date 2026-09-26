@@ -1,6 +1,7 @@
 mod accounts;
 mod auth;
 mod commands;
+mod game_icon;
 mod http_util;
 mod importer;
 mod instance;
@@ -11,6 +12,7 @@ mod remote_api;
 mod server_instance;
 mod settings;
 mod state;
+mod tunnel;
 
 use state::AppState;
 use std::path::PathBuf;
@@ -62,6 +64,8 @@ pub fn run() {
             commands::instances::detect_server_instance,
             commands::instances::import_server_folder,
             commands::instances::get_server_properties,
+            commands::instances::get_server_info,
+            commands::instances::get_public_ip,
             commands::instances::save_server_properties,
             commands::instances::get_ops,
             commands::instances::get_whitelist,
@@ -130,8 +134,11 @@ pub fn run() {
             commands::auth::set_remote_admin_port,
             commands::auth::set_remote_admin_instance,
             commands::auth::set_remote_admin_full_access,
+            commands::auth::set_remote_admin_tunnel_enabled,
+            commands::auth::get_tunnel_code,
             commands::auth::set_spacious_instance_view,
             commands::remote_client::remote_connect,
+            commands::remote_client::remote_connect_code,
             commands::remote_client::remote_reconnect,
             commands::remote_client::list_remote_servers,
             commands::remote_client::remove_remote_server,

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useAutoFollow } from "../hooks/useAutoFollow";
 import { isMintPollLine } from "../lib/consoleFilter";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 interface Props {
   instanceId: string;
@@ -59,10 +60,10 @@ export function ServerConsolePanel({ instanceId, logLines, isRunning }: Props) {
         .catch(() => !cancelled && setFallbackContent(""));
     }
     poll();
-    const interval = setInterval(poll, 2000);
+    const stopInterval = setVisibleInterval(poll, 2000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [instanceId, isRunning, hasLiveLines]);
 

@@ -4,6 +4,7 @@ import { parseChatLines, type ChatEntry } from "../chatParser";
 import { useAutoFollow } from "../hooks/useAutoFollow";
 import { enqueueMojangLookup } from "../lib/mojangLookupQueue";
 import { PlayerAvatar } from "./PlayerAvatar";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 interface Props {
   instanceId: string;
@@ -34,10 +35,10 @@ export function ChatPanel({ instanceId, logLines, isRunning }: Props) {
         .catch(() => !cancelled && setFallbackContent(""));
     }
     poll();
-    const interval = setInterval(poll, 2000);
+    const stopInterval = setVisibleInterval(poll, 2000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [instanceId, isRunning, hasLiveLines]);
 

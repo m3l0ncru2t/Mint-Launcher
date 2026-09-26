@@ -203,7 +203,7 @@ export function Sidebar({
             <div className="instance-row-text">
               <div className="instance-row-name">{link.name}</div>
               <div className="instance-row-meta">
-                {link.host}:{link.port}
+                {link.nodeId ? `${link.versionId} · ${link.loader}` : `${link.host}:${link.port}`}
               </div>
             </div>
           </div>

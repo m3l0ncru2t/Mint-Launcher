@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ServerInfo,
   AccountSummary,
   BannedPlayerEntry,
   ConfigEntry,
@@ -71,6 +72,8 @@ export const api = {
 
   openFolder: (path: string) => invoke<void>("open_folder", { path }),
 
+  getServerInfo: (id: string) => invoke<ServerInfo>("get_server_info", { id }),
+  getPublicIp: () => invoke<string>("get_public_ip"),
   getServerProperties: (id: string) => invoke<Record<string, string>>("get_server_properties", { id }),
 
   saveServerProperties: (id: string, values: Record<string, string>) =>
@@ -225,6 +228,10 @@ export const api = {
 
   setRemoteAdminPort: (port: number) => invoke<void>("set_remote_admin_port", { port }),
 
+  setRemoteAdminTunnelEnabled: (enabled: boolean) => invoke<void>("set_remote_admin_tunnel_enabled", { enabled }),
+
+  getTunnelCode: () => invoke<string>("get_tunnel_code"),
+
   setRemoteAdminInstance: (instanceId: string | null) =>
     invoke<void>("set_remote_admin_instance", { instanceId }),
 
@@ -235,6 +242,8 @@ export const api = {
   setSpaciousInstanceView: (enabled: boolean) => invoke<void>("set_spacious_instance_view", { enabled }),
 
   remoteConnect: (host: string, port: number) => invoke<RemoteServerLink>("remote_connect", { host, port }),
+
+  remoteConnectCode: (code: string) => invoke<RemoteServerLink>("remote_connect_code", { code }),
 
   remoteReconnect: (id: string) => invoke<RemoteServerLink>("remote_reconnect", { id }),
 

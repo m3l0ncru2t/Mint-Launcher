@@ -9,6 +9,34 @@ interface Props {
   onImported: (lastInstanceId: string) => void;
 }
 
+const LAUNCHER_ORDER: ImportCandidate["launcher"][] = ["modrinth", "curseForge", "multiMc", "official"];
+
+const LAUNCHER_CHIP: Record<ImportCandidate["launcher"], { letter: string; color: string }> = {
+  official: { letter: "M", color: "#5b8c3a" },
+  multiMc: { letter: "P", color: "#e08a2c" },
+  curseForge: { letter: "C", color: "#f16436" },
+  modrinth: { letter: "R", color: "#1bb76e" },
+};
+
+function LauncherChip({ launcher }: { launcher: ImportCandidate["launcher"] }) {
+  const chip = LAUNCHER_CHIP[launcher];
+  return (
+    <span className="launcher-chip" style={{ background: chip.color }} title={LAUNCHER_LABELS[launcher]}>
+      {chip.letter}
+    </span>
+  );
+}
+
+function CandidateIcon({ candidate }: { candidate: ImportCandidate }) {
+  return candidate.iconBase64 ? (
+    <img className="import-candidate-icon" src={`data:image/png;base64,${candidate.iconBase64}`} alt="" />
+  ) : (
+    <div className="import-candidate-icon import-candidate-icon-fallback">
+      {candidate.name.slice(0, 1).toUpperCase() || "?"}
+    </div>
+  );
+}
+
 const LAUNCHER_LABELS: Record<ImportCandidate["launcher"], string> = {
   official: "Official Launcher",
   multiMc: "MultiMC / Prism / PolyMC",
@@ -37,8 +65,34 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
+  // Scans every launcher folder Mint already knows to look in as soon as the
+  // dialog opens, so whatever's installed shows up ready to tick - no
+  // clicking through a button per launcher first.
+  const [autoScanning, setAutoScanning] = useState(true);
   useEffect(() => {
-    api.suggestLauncherPaths().then(setSuggestions).catch(() => {});
+    let cancelled = false;
+    (async () => {
+      const paths = await api.suggestLauncherPaths().catch(() => [] as SuggestedPath[]);
+      if (cancelled) return;
+      setSuggestions(paths);
+      const results = await Promise.allSettled(paths.map((p) => api.scanExternalLauncher(p.path)));
+      if (cancelled) return;
+      const seen = new Set<string>();
+      const found: ImportCandidate[] = [];
+      for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        for (const c of r.value) {
+          if (seen.has(c.sourcePath)) continue;
+          seen.add(c.sourcePath);
+          found.push(c);
+        }
+      }
+      if (found.length > 0) setCandidates(found);
+      setAutoScanning(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -139,8 +193,13 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
           App.
         </div>
 
+        {!candidates && autoScanning && <div className="hint">Looking for instances from your other launchers…</div>}
+
         {!candidates && (
           <>
+            {!autoScanning && suggestions.length > 0 && (
+              <div className="hint">No instances were found automatically - pick a folder below.</div>
+            )}
             <div className="form-field">
               <label>Have a Mint Launcher backup?</label>
               <button className="ghost-btn" style={{ width: "100%" }} onClick={handleRestoreBackup} disabled={restoring}>
@@ -180,50 +239,81 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
 
         {candidates && (
           <>
+            <div className="import-list-toolbar">
+              <span className="hint-inline">
+                {candidates.length} found · {selected.size} selected
+              </span>
+              <span>
+                <button
+                  type="button"
+                  className="ghost-btn small"
+                  disabled={importing}
+                  onClick={() => setSelected(new Set(candidates.map((_, i) => i)))}
+                >
+                  Select all
+                </button>{" "}
+                <button type="button" className="ghost-btn small" disabled={importing} onClick={() => setSelected(new Set())}>
+                  None
+                </button>
+              </span>
+            </div>
             <div className="import-candidate-list">
-              {candidates.map((c, i) => {
-                const status = statuses[i]?.status ?? "idle";
+              {LAUNCHER_ORDER.map((launcher) => {
+                const rows = candidates.map((c, i) => ({ c, i })).filter(({ c }) => c.launcher === launcher);
+                if (rows.length === 0) return null;
                 return (
-                  <label key={i} className={`import-candidate-row${selected.has(i) ? " selected" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(i)}
-                      disabled={importing}
-                      onChange={() => toggle(i)}
-                    />
-                    <div className="import-candidate-info">
-                      <div className="import-candidate-name">{c.name}</div>
-                      <div className="import-candidate-meta">
-                        <span className="launcher-badge">{LAUNCHER_LABELS[c.launcher]}</span>
-                        {c.versionId}
-                        {c.loader !== "vanilla" && ` · ${c.loader}${c.loaderVersion ? ` ${c.loaderVersion}` : ""}`}
-                        {" · "}
-                        {formatSize(c.sizeBytes)}
-                      </div>
-                      {status === "importing" && currentProgress && currentProgress.total > 0 && (
-                        <div className="progress-bar-track">
-                          <div
-                            className="progress-bar-fill"
-                            style={{
-                              width: `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`,
-                            }}
+                  <div key={launcher} className="import-group">
+                    <div className="import-group-header">
+                      <LauncherChip launcher={launcher} />
+                      {LAUNCHER_LABELS[launcher]}
+                      <span className="hint-inline">({rows.length})</span>
+                    </div>
+                    {rows.map(({ c, i }) => {
+                      const status = statuses[i]?.status ?? "idle";
+                      return (
+                        <label key={i} className={`import-candidate-row${selected.has(i) ? " selected" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={selected.has(i)}
+                            disabled={importing}
+                            onChange={() => toggle(i)}
                           />
-                        </div>
-                      )}
-                      {status === "error" && <div className="error-text">{statuses[i]?.error}</div>}
-                    </div>
-                    <div className="import-candidate-status">
-                      {status === "importing" && (
-                        <span className="hint-inline">
-                          {currentProgress && currentProgress.total > 0
-                            ? `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`
-                            : "Importing…"}
-                        </span>
-                      )}
-                      {status === "done" && <span className="hint-inline">✓ Imported</span>}
-                      {status === "error" && <span className="hint-inline">Failed</span>}
-                    </div>
-                  </label>
+                          <CandidateIcon candidate={c} />
+                          <div className="import-candidate-info">
+                            <div className="import-candidate-name">{c.name}</div>
+                            <div className="import-candidate-meta">
+                              {c.versionId}
+                              {c.loader !== "vanilla" && ` · ${c.loader}${c.loaderVersion ? ` ${c.loaderVersion}` : ""}`}
+                              {" · "}
+                              {formatSize(c.sizeBytes)}
+                            </div>
+                            {status === "importing" && currentProgress && currentProgress.total > 0 && (
+                              <div className="progress-bar-track">
+                                <div
+                                  className="progress-bar-fill"
+                                  style={{
+                                    width: `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`,
+                                  }}
+                                />
+                              </div>
+                            )}
+                            {status === "error" && <div className="error-text">{statuses[i]?.error}</div>}
+                          </div>
+                          <div className="import-candidate-status">
+                            {status === "importing" && (
+                              <span className="hint-inline">
+                                {currentProgress && currentProgress.total > 0
+                                  ? `${Math.min(100, Math.round((currentProgress.current / currentProgress.total) * 100))}%`
+                                  : "Importing…"}
+                              </span>
+                            )}
+                            {status === "done" && <span className="hint-inline">✓ Imported</span>}
+                            {status === "error" && <span className="hint-inline">Failed</span>}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </div>
@@ -236,7 +326,7 @@ export function ImportExternalDialog({ onClose, onImported }: Props) {
               }}
               disabled={importing}
             >
-              ← Choose a different folder
+              ← Restore a backup or pick another folder
             </button>
           </>
         )}

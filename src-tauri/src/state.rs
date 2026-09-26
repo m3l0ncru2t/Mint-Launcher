@@ -98,6 +98,9 @@ pub struct AppState {
     /// canceled, so a stale sender from a previous restart can never cancel
     /// a later, unrelated one.
     pub restart_cancellations: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// Admin-side Mint Connect state (see `tunnel.rs`) - one shared iroh
+    /// endpoint plus a loopback proxy per linked host, all created lazily.
+    pub tunnel_client: Arc<crate::tunnel::ClientTunnel>,
 }
 
 impl AppState {
@@ -119,6 +122,7 @@ impl AppState {
             tps_samples: Mutex::new(HashMap::new()),
             remote_sessions: Mutex::new(HashMap::new()),
             restart_cancellations: Mutex::new(HashMap::new()),
+            tunnel_client: Arc::new(crate::tunnel::ClientTunnel::default()),
         }
     }
 
@@ -179,10 +183,20 @@ impl AppState {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let state = app.state::<AppState>();
-            let dead: Vec<String> = {
+            // Snapshot under the lock, check outside it: `pid_is_alive` shells
+            // out to `tasklist` on Windows (tens of ms per pid) and used to
+            // run while `running_instances` was locked - and directly on the
+            // async runtime - stalling anything else needing that lock (every
+            // launch/stop/status call) for as long as the checks took.
+            let snapshot: Vec<(String, u32)> = {
                 let running = state.running_instances.lock().await;
-                running.iter().filter(|(_, r)| !pid_is_alive(r.pid)).map(|(id, _)| id.clone()).collect()
+                running.iter().map(|(id, r)| (id.clone(), r.pid)).collect()
             };
+            let dead: Vec<String> = tokio::task::spawn_blocking(move || {
+                snapshot.into_iter().filter(|(_, pid)| !pid_is_alive(*pid)).map(|(id, _)| id).collect()
+            })
+            .await
+            .unwrap_or_default();
             for instance_id in dead {
                 state.running_instances.lock().await.remove(&instance_id);
                 state.instance_stdins.lock().await.remove(&instance_id);

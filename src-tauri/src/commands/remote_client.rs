@@ -26,6 +26,23 @@ pub struct RemoteServerLink {
     pub version_id: String,
     pub loader: crate::instance::ModLoader,
     pub has_icon: bool,
+    /// Set for a host linked through Mint Connect (see `tunnel.rs`) instead
+    /// of a plain address - its `host`/`port` are then only placeholders on
+    /// disk, replaced at load time with the live loopback proxy (see
+    /// `resolve`) since that port changes every launch.
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+
+/// Points a Mint Connect link's host/port at its (lazily started) loopback
+/// proxy. A no-op for an ordinary address link.
+async fn resolve(state: &AppState, link: &mut RemoteServerLink) {
+    if let Some(code) = link.node_id.clone() {
+        if let Ok(port) = state.tunnel_client.proxy_port(&code).await {
+            link.host = "127.0.0.1".to_string();
+            link.port = port;
+        }
+    }
 }
 
 fn remote_servers_path(data_dir: &Path) -> std::path::PathBuf {
@@ -44,13 +61,20 @@ fn save(data_dir: &Path, links: &[RemoteServerLink]) -> std::io::Result<()> {
 }
 
 #[tauri::command]
-pub fn list_remote_servers(state: State<AppState>) -> Vec<RemoteServerLink> {
-    load(&state.data_dir)
+pub async fn list_remote_servers(state: State<'_, AppState>) -> Result<Vec<RemoteServerLink>, String> {
+    let mut links = load(&state.data_dir);
+    for link in links.iter_mut() {
+        resolve(&state, link).await;
+    }
+    Ok(links)
 }
 
 #[tauri::command]
-pub fn remove_remote_server(state: State<AppState>, id: String) -> Result<(), String> {
+pub async fn remove_remote_server(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut links = load(&state.data_dir);
+    if let Some(code) = links.iter().find(|l| l.id == id).and_then(|l| l.node_id.clone()) {
+        state.tunnel_client.forget(&code).await;
+    }
     links.retain(|l| l.id != id);
     save(&state.data_dir, &links).map_err(|e| e.to_string())
 }
@@ -127,6 +151,27 @@ async fn login_handshake(client: &reqwest::Client, profile: &GameProfile, host: 
 /// and the username.
 #[tauri::command]
 pub async fn remote_connect(state: State<'_, AppState>, host: String, port: u16) -> Result<RemoteServerLink, String> {
+    connect_common(&state, host, port, None).await
+}
+
+/// Links a host through Mint Connect using its connection code - no address,
+/// VPN or port forwarding involved. Dials the host first so a wrong code or
+/// an offline host is reported clearly, then runs the same handshake as
+/// `remote_connect` over the loopback proxy.
+#[tauri::command]
+pub async fn remote_connect_code(state: State<'_, AppState>, code: String) -> Result<RemoteServerLink, String> {
+    let code = crate::tunnel::normalize_code(&code)?;
+    state.tunnel_client.probe(&code).await?;
+    let port = state.tunnel_client.proxy_port(&code).await?;
+    connect_common(&state, "127.0.0.1".to_string(), port, Some(code)).await
+}
+
+async fn connect_common(
+    state: &AppState,
+    host: String,
+    port: u16,
+    node_id: Option<String>,
+) -> Result<RemoteServerLink, String> {
     let profile = state
         .active_profile
         .lock()
@@ -158,11 +203,22 @@ pub async fn remote_connect(state: State<'_, AppState>, host: String, port: u16)
         version_id: info.version_id,
         loader: info.loader,
         has_icon: info.has_icon,
+        node_id,
     };
 
+    // A Mint Connect link's loopback port is only good for this launch, so
+    // what gets saved has placeholders instead (see `resolve`).
+    let stored = match &link.node_id {
+        Some(_) => RemoteServerLink { host: String::new(), port: 0, ..link.clone() },
+        None => link.clone(),
+    };
     let mut links = load(&state.data_dir);
-    links.retain(|l| !(l.host == link.host && l.port == link.port));
-    links.push(link.clone());
+    links.retain(|l| match (&l.node_id, &stored.node_id) {
+        (Some(a), Some(b)) => a != b,
+        (None, None) => !(l.host == stored.host && l.port == stored.port),
+        _ => true,
+    });
+    links.push(stored);
     save(&state.data_dir, &links).map_err(|e| e.to_string())?;
 
     Ok(link)
@@ -189,17 +245,18 @@ pub async fn remote_reconnect(state: State<'_, AppState>, id: String) -> Result<
         .clone()
         .ok_or_else(|| "Sign in with a Microsoft account first".to_string())?;
 
-    let token = login_handshake(&state.http, &profile, &existing.host, existing.port).await?;
-    let updated = RemoteServerLink { token, ..existing };
+    let mut reachable = existing.clone();
+    resolve(&state, &mut reachable).await;
+    let token = login_handshake(&state.http, &profile, &reachable.host, reachable.port).await?;
 
     for link in links.iter_mut() {
         if link.id == id {
-            *link = updated.clone();
+            link.token = token.clone();
         }
     }
     save(&state.data_dir, &links).map_err(|e| e.to_string())?;
 
-    Ok(updated)
+    Ok(RemoteServerLink { token, ..reachable })
 }
 
 async fn join_server(client: &reqwest::Client, profile: &GameProfile, server_id: &str) -> anyhow::Result<()> {

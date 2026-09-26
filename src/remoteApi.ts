@@ -1,5 +1,6 @@
 import { api } from "./api";
 import type {
+  ServerInfo,
   BannedPlayerEntry,
   InstalledModInfo,
   InstallSummary,
@@ -215,6 +216,15 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
       }),
     removeOpEntry: (name: string) => request(`/ops/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
+    getServerInfo: () => request("/server-info").then((r) => r.json() as Promise<ServerInfo>),
+    getWhitelistEnabled: () =>
+      request("/whitelist-state").then((r) => r.json() as Promise<{ enabled: boolean }>).then((r) => r.enabled),
+    setWhitelistEnabled: (enabled: boolean) =>
+      request("/whitelist-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      }),
     getWhitelist: () => request("/whitelist").then((r) => r.json() as Promise<WhitelistEntry[]>),
     addWhitelistEntry: (username: string) =>
       request("/whitelist", {

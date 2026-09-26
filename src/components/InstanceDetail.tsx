@@ -6,6 +6,7 @@ import { InstanceFilesPanel } from "./InstanceFilesPanel";
 import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
 import type { Instance, LaunchProgressEvent, ProcessStats, TpsInfo } from "../types";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 // Exported so Sidebar can show a loading state for every instance, not just
 // the selected one - kept as a single source of truth for "what stage means
@@ -109,10 +110,10 @@ export function InstanceDetail({
         .catch(() => !cancelled && setStats(null));
     }
     poll();
-    const interval = setInterval(poll, 2000);
+    const stopInterval = setVisibleInterval(poll, 2000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [isServer, isRunning, pid]);
 
@@ -134,10 +135,10 @@ export function InstanceDetail({
         .catch(() => !cancelled && setTps(null));
     }
     poll();
-    const interval = setInterval(poll, 5000);
+    const stopInterval = setVisibleInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [instance.id, isServer, isRunning]);
 
@@ -201,10 +202,10 @@ export function InstanceDetail({
       })
       .catch(() => {})
       .finally(poll);
-    const interval = setInterval(poll, 5000);
+    const stopInterval = setVisibleInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [instance.id, isServer, isRunning]);
 

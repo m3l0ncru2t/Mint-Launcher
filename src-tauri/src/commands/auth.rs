@@ -83,6 +83,19 @@ pub async fn set_remote_admin_full_access(
 }
 
 #[tauri::command]
+pub async fn set_remote_admin_tunnel_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    current.remote_admin_tunnel_enabled = enabled;
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
+/// This install's Mint Connect code - what an owner gives their admins.
+#[tauri::command]
+pub fn get_tunnel_code(state: State<AppState>) -> Result<String, String> {
+    crate::tunnel::connection_code(&state.data_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn set_remote_admin_instance(state: State<'_, AppState>, instance_id: Option<String>) -> Result<(), String> {
     let mut current = state.settings.lock().await;
     current.remote_admin_instance_id = instance_id;

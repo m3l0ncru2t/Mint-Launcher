@@ -64,6 +64,8 @@ fn build_router(app: AppHandle) -> Router {
         .route("/ops/{name}", delete(remove_op))
         .route("/whitelist", get(list_whitelist).post(add_whitelist))
         .route("/whitelist/{name}", delete(remove_whitelist))
+        .route("/whitelist-state", get(whitelist_state).post(set_whitelist_state))
+        .route("/server-info", get(server_info))
         .route("/bans", get(list_bans).post(add_ban))
         .route("/bans/{name}", delete(remove_ban))
         .route("/start", post(start))
@@ -83,12 +85,41 @@ fn build_router(app: AppHandle) -> Router {
 /// already running just works.
 pub async fn run_supervisor(app: AppHandle) {
     let mut current: Option<(tokio::task::JoinHandle<()>, u16)> = None;
+    // The Mint Connect tunnel endpoint (see tunnel.rs), while it's switched
+    // on - independent of the port listener above, since it just forwards
+    // into it.
+    let mut tunnel: Option<iroh::Endpoint> = None;
+    let tunnel_port = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
     loop {
-        let (enabled, port) = {
+        let (enabled, port, tunnel_wanted) = {
             let state = app.state::<AppState>();
             let settings = state.settings.lock().await;
-            (settings.remote_admin_enabled, settings.remote_admin_port)
+            (
+                settings.remote_admin_enabled,
+                settings.remote_admin_port,
+                settings.remote_admin_enabled && settings.remote_admin_tunnel_enabled,
+            )
         };
+
+        tunnel_port.store(port, std::sync::atomic::Ordering::Relaxed);
+        if tunnel_wanted && tunnel.is_none() {
+            // A failure (no network yet, say) just retries on the next tick.
+            let data_dir = app.state::<AppState>().data_dir.clone();
+            tunnel = crate::tunnel::start_host(&data_dir, tunnel_port.clone()).await.ok();
+        } else if !tunnel_wanted {
+            if let Some(endpoint) = tunnel.take() {
+                endpoint.close().await;
+            }
+        }
+
+        // Expired sessions were only ever dropped when that same token was
+        // presented again, so ones never reused (an admin who just closed
+        // their Mint) piled up in memory for the life of the process.
+        {
+            let state = app.state::<AppState>();
+            let now = std::time::Instant::now();
+            state.remote_sessions.lock().await.retain(|_, s| s.expires_at > now);
+        }
 
         let needs_restart = match &current {
             Some((_, running_port)) => enabled && *running_port != port,
@@ -622,6 +653,18 @@ async fn console_ws(
     Ok(ws.on_upgrade(move |socket| stream_console(app, instance_id, socket)))
 }
 
+/// Same two patterns the local console filters (see src/lib/consoleFilter.ts):
+/// "...of a max of N players online..." and "...time is N".
+fn is_mint_poll_line(line: &str) -> bool {
+    let players = line
+        .split_once("of a max of ")
+        .is_some_and(|(_, rest)| rest.trim_start().starts_with(|c: char| c.is_ascii_digit()) && rest.contains("players online"));
+    let time = line
+        .split_once("time is ")
+        .is_some_and(|(_, rest)| rest.trim_start().starts_with(|c: char| c.is_ascii_digit()));
+    players || time
+}
+
 /// Bridges the same `instance-log` event Tauri already emits internally (for
 /// the local console tab) onto a WebSocket - `app.listen_any` works for any
 /// Rust-side subscriber, not just the frontend, so no separate log-tailing
@@ -637,6 +680,13 @@ async fn stream_console(app: AppHandle, instance_id: String, mut socket: WebSock
             return;
         }
         if let Some(line) = payload.get("line").and_then(|v| v.as_str()) {
+            // Mint's own `list`/`time query gametime` polling responses are
+            // noise to a remote admin too (their console hides them as well) -
+            // dropping them here also saves sending them over the wire every
+            // few seconds, and covers admins on an older build.
+            if is_mint_poll_line(line) {
+                return;
+            }
             let _ = tx.send(line.to_string());
         }
     });
@@ -1140,5 +1190,76 @@ async fn kill(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Status
     commands::launch::kill_instance(app.clone(), state, id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteServerInfo {
+    #[serde(flatten)]
+    info: commands::instances::ServerInfo,
+    public_ip: Option<String>,
+    /// True when this admin isn't allowed the host's addresses (see below).
+    ips_hidden: bool,
+}
+
+/// The Server tab's numbers. The host's IP addresses are only included for
+/// full-access admins - a server behind a proxy (TCPShield and the like) may
+/// be deliberately keeping its real address private even from its ops.
+async fn server_info(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<RemoteServerInfo>, ApiError> {
+    let session = require_session(&app, &headers).await?;
+    let (inst, _) = shared_instance(&app).await?;
+    let full = has_full_access(&app, &session).await;
+    let state = app.state::<AppState>();
+    let instances_dir = state.instances_dir();
+    let mut info = tauri::async_runtime::spawn_blocking(move || {
+        commands::instances::collect_server_info(&inst, &instances_dir)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let public_ip = if full {
+        commands::instances::lookup_public_ip(&state.http).await.ok()
+    } else {
+        info.local_ip = None;
+        None
+    };
+    Ok(Json(RemoteServerInfo { info, public_ip, ips_hidden: !full }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WhitelistState {
+    enabled: bool,
+}
+
+async fn whitelist_state(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<WhitelistState>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (inst, _) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    let props = crate::minecraft::server_properties::read_properties(&inst.game_dir(&state.instances_dir()));
+    Ok(Json(WhitelistState { enabled: props.get("white-list").map(String::as_str) == Some("true") }))
+}
+
+/// Same as the local Players tab's toggle: saved to server.properties (so
+/// it holds across restarts and works while stopped), plus `whitelist
+/// on/off` through the console when running so it applies immediately. Any
+/// op may do this - it's the same `whitelist` command they could run in game.
+async fn set_whitelist_state(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<WhitelistState>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (inst, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    let updates = HashMap::from([("white-list".to_string(), body.enabled.to_string())]);
+    crate::minecraft::server_properties::write_properties(&inst.game_dir(&state.instances_dir()), &updates)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let running = state.running_instances.lock().await.contains_key(&id);
+    if running {
+        let command = if body.enabled { "whitelist on" } else { "whitelist off" };
+        commands::launch::send_instance_command(app.state::<AppState>(), id, command.to_string())
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }

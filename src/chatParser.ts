@@ -25,17 +25,29 @@ export interface ChatEntry {
 
 // "[13:14:15] [Server thread/INFO]: " - captured (not just stripped) so
 // parseChatLines can dedupe by how close together two identical lines are.
-const LOG_PREFIX = /^\[(\d{1,2}):(\d{2}):(\d{2})\]\s*\[[^\]]*\]:\s*/;
+// Modern loaders can put more than one bracket group before the colon
+// ("[Server thread/INFO] [minecraft/MinecraftServer]: ") or a "(Minecraft)"
+// source tag, so any run of those is accepted.
+const LOG_PREFIX = /^\[(\d{1,2}):(\d{2}):(\d{2})\]\s*(?:\[[^\]]*\]\s*|\([^)]*\)\s*)*:?\s*/;
+
+// Newer servers log every chat-formatting mod's output (and signed chat)
+// under one of these instead of the bare "<name> message" - stripped so the
+// same patterns below apply.
+const CHAT_WRAPPER = /^(?:System chat:|Chat:|\[Not Secure\])\s*/i;
 
 export function parseChatLine(rawLine: string): ChatEntry | null {
   const prefixMatch = rawLine.match(LOG_PREFIX);
   const seconds = prefixMatch
     ? Number(prefixMatch[1]) * 3600 + Number(prefixMatch[2]) * 60 + Number(prefixMatch[3])
     : undefined;
-  const text = rawLine.replace(LOG_PREFIX, "").trim();
+  let text = rawLine.replace(LOG_PREFIX, "").trim();
+  const wrapped = CHAT_WRAPPER.test(text);
+  while (CHAT_WRAPPER.test(text)) text = text.replace(CHAT_WRAPPER, "");
   if (!text) return null;
 
-  let m = text.match(/^<(.+?)>\s?(.*)$/);
+  // A rank/tag before the name ("[Admin] <Steve> hi") is dropped; a tag
+  // inside the brackets ("<[MINT] Steve> hi") stays part of the name.
+  let m = text.match(/^(?:\[[^\[\]]*\]\s*)*<(.+?)>\s?(.*)$/);
   if (m) return { type: "chat", raw: rawLine, player: m[1], message: m[2], seconds };
 
   m = text.match(/^(.+?) joined the game$/);
@@ -54,6 +66,14 @@ export function parseChatLine(rawLine: string): ChatEntry | null {
 
   m = text.match(/^You whisper to (.+?):\s*(.*)$/i);
   if (m) return { type: "whisper", raw: rawLine, target: m[1], message: m[2], seconds };
+
+  // Chat-formatting mods (and Discord bridges) log "Name » message" or
+  // "Name: message" - only trusted behind a chat wrapper, since as bare
+  // console text that shape is far too common (every "Key: value" line).
+  if (wrapped) {
+    m = text.match(/^(?:\[[^\[\]]*\]\s*)*([A-Za-z0-9_]{2,16})\s*(?:»|>>|›|:)\s+(.+)$/);
+    if (m) return { type: "chat", raw: rawLine, player: m[1], message: m[2], seconds };
+  }
 
   return null;
 }

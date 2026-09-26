@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { PlayerAvatar } from "./PlayerAvatar";
 import type { BannedPlayerEntry, OpEntry, WhitelistEntry } from "../types";
+import { setVisibleInterval } from "../lib/visibleInterval";
 
 interface Props {
   instanceId: string;
@@ -61,6 +62,7 @@ export function PlayersPanel({ instanceId, isRunning }: Props) {
   const [ops, setOps] = useState<OpEntry[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
   const [bans, setBans] = useState<BannedPlayerEntry[]>([]);
+  const [whitelistOn, setWhitelistOn] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -71,9 +73,14 @@ export function PlayersPanel({ instanceId, isRunning }: Props) {
   }
 
   useEffect(() => {
+    setWhitelistOn(null);
+    api
+      .getServerProperties(instanceId)
+      .then((props) => setWhitelistOn(props["white-list"] === "true"))
+      .catch(() => {});
     refreshLists();
-    const interval = setInterval(refreshLists, 5000);
-    return () => clearInterval(interval);
+    const stopInterval = setVisibleInterval(refreshLists, 5000);
+    return () => stopInterval();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId]);
 
@@ -133,12 +140,23 @@ export function PlayersPanel({ instanceId, isRunning }: Props) {
       })
       .catch(() => {})
       .finally(poll);
-    const interval = setInterval(poll, 5000);
+    const stopInterval = setVisibleInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      stopInterval();
     };
   }, [instanceId, isRunning]);
+
+  // Written to server.properties either way (so it holds across restarts,
+  // and works while stopped); also sent as a console command when running
+  // so it takes effect immediately instead of at the next start.
+  function handleToggleWhitelist(enabled: boolean) {
+    return run("toggle-whitelist", async () => {
+      await api.saveServerProperties(instanceId, { "white-list": String(enabled) });
+      if (isRunning) await api.sendInstanceCommand(instanceId, enabled ? "whitelist on" : "whitelist off");
+      setWhitelistOn(enabled);
+    });
+  }
 
   async function run(actionKey: string, action: () => Promise<void>) {
     setBusyAction(actionKey);
@@ -271,6 +289,17 @@ export function PlayersPanel({ instanceId, isRunning }: Props) {
 
       <div className="panel-header players-section-header">
         <h4>Whitelist{whitelist.length > 0 ? ` (${whitelist.length})` : ""}</h4>
+        {whitelistOn !== null && (
+          <label className="whitelist-toggle" title="Only whitelisted players can join while this is on">
+            <input
+              type="checkbox"
+              checked={whitelistOn}
+              disabled={busyAction === "toggle-whitelist"}
+              onChange={(e) => handleToggleWhitelist(e.target.checked)}
+            />
+            {whitelistOn ? "On" : "Off"}
+          </label>
+        )}
       </div>
       <AddByUsername placeholder="Add a username to the whitelist…" busy={!!busyAction} onAdd={handleAddWhitelist} />
       {whitelist.length === 0 && <div className="placeholder">Nobody's whitelisted.</div>}

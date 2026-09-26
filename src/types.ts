@@ -134,6 +134,7 @@ export interface Settings {
   remoteAdminPort: number;
   remoteAdminInstanceId: string | null;
   remoteAdminFullAccessUuids: string[];
+  remoteAdminTunnelEnabled: boolean;
   spaciousInstanceView: boolean;
 }
 
@@ -215,6 +216,9 @@ export interface RemoteServerLink {
   versionId: string;
   loader: ModLoader;
   hasIcon: boolean;
+  /** Set for a server linked through Mint Connect (a connection code)
+   * instead of an address - `host`/`port` are then a loopback proxy. */
+  nodeId: string | null;
 }
 
 export interface ResourcePackFile {
@@ -360,4 +364,23 @@ export interface ImportCandidate {
 
 export interface LoginUrlInfo {
   url: string;
+}
+
+export interface ServerInfo {
+  localIp: string | null;
+  port: number;
+  levelName: string;
+  totalPlayersJoined: number;
+  totalPlaytimeSeconds: number;
+  topPlayers: { name: string; playtimeSeconds: number }[];
+  worldSizeBytes: number;
+  modCount: number;
+  opCount: number;
+  whitelistCount: number;
+  banCount: number;
+  /** Remote view only: the host's public IP (`null` if its lookup failed or
+   * `ipsHidden`), and whether this admin lacks the full access needed to
+   * see the host's addresses at all. */
+  publicIp?: string | null;
+  ipsHidden?: boolean;
 }

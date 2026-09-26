@@ -21,6 +21,8 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [sharedOps, setSharedOps] = useState<OpEntry[] | null>(null);
+  const [tunnelCode, setTunnelCode] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const opacitySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -28,6 +30,10 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const activePreset = BACKGROUND_THEMES.find((t) => t.id === activeThemeKey);
   const activeOpacity =
     settings.themeOpacity[activeThemeKey] ?? activePreset?.defaultOpacity ?? { sidebar: 0.82, modsPanel: 0.82 };
+
+  useEffect(() => {
+    api.getTunnelCode().then(setTunnelCode).catch(() => setTunnelCode(null));
+  }, []);
 
   // The shared server's operators - the only people who can connect as
   // remote admins at all (see remote_api's login), so they're who "full
@@ -513,6 +519,52 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
                 Give admins this machine's Tailscale/VPN address and this port to connect with - never forward this
                 port on your router.
               </div>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.remoteAdminTunnelEnabled}
+                  disabled={busy || !settings.remoteAdminEnabled}
+                  onChange={async (e) => {
+                    const enabled = e.target.checked;
+                    setBusy(true);
+                    setError(null);
+                    try {
+                      await api.setRemoteAdminTunnelEnabled(enabled);
+                      onSettingsChange({ ...settings, remoteAdminTunnelEnabled: enabled });
+                    } catch (err) {
+                      setError(String(err));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
+                Mint Connect - let admins reach this server from anywhere
+              </label>
+              <div className="hint">
+                Built-in private connection: no Tailscale, VPN or port forwarding needed. Admins just paste the code
+                below into their Mint (Import Remote Server). Traffic is end-to-end encrypted, and it's the same
+                remote admin API as above - anyone connecting still has to sign in with a Minecraft account that's
+                an operator on the shared server. Anyone who has the code can attempt to connect, so only share it
+                with your admins.
+              </div>
+              {settings.remoteAdminTunnelEnabled && tunnelCode && (
+                <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                  <input type="text" readOnly value={tunnelCode} style={{ flex: 1, fontFamily: "monospace" }} />
+                  <button
+                    className="ghost-btn small"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(tunnelCode);
+                      setCodeCopied(true);
+                      setTimeout(() => setCodeCopied(false), 1500);
+                    }}
+                  >
+                    {codeCopied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
