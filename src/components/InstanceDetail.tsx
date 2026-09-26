@@ -7,6 +7,45 @@ import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
 import type { Instance, LaunchProgressEvent, ProcessStats, TpsInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
+import { useUptime } from "../lib/uptime";
+import { getPublicIpCached } from "../lib/publicIp";
+
+/** Connect addresses for a server's header: LAN IP, and the owner's domain
+ * if they set one on the Server tab (else the public IP). */
+function useServerAddresses(instanceId: string | null) {
+  const [value, setValue] = useState<{ local: string | null; public: string | null; isDomain: boolean } | null>(null);
+  useEffect(() => {
+    setValue(null);
+    if (!instanceId) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const a = await api.getServerAddresses(instanceId!);
+        const withPort = (host: string) => (a.port === 25565 ? host : `${host}:${a.port}`);
+        const local = a.localIp ? `${a.localIp}:${a.port}` : null;
+        if (a.domain) {
+          if (!cancelled) setValue({ local, public: withPort(a.domain), isDomain: true });
+          return;
+        }
+        if (!cancelled) setValue({ local, public: null, isDomain: false });
+        const ip = await getPublicIpCached().catch(() => null);
+        if (!cancelled && ip) setValue({ local, public: `${ip}:${a.port}`, isDomain: false });
+      } catch {
+        // No addresses to show.
+      }
+    }
+    load();
+    const onDomainChanged = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === instanceId) load();
+    };
+    window.addEventListener("mint-server-domain-changed", onDomainChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("mint-server-domain-changed", onDomainChanged);
+    };
+  }, [instanceId]);
+  return value;
+}
 
 // Exported so Sidebar can show a loading state for every instance, not just
 // the selected one - kept as a single source of truth for "what stage means
@@ -33,9 +72,26 @@ function findCrashHint(logLines: string[]): string | null {
   return null;
 }
 
+// A clean exit's message ("Minecraft closed"/"Server stopped") has no code
+// in it at all; every other exit's message ends in "(... exit code N ...)".
 function parseExitCode(message: string): number | null {
-  const match = message.match(/exited with code (-?\d+)/);
+  const match = message.match(/exit code (-?\d+)/);
   return match ? Number(match[1]) : null;
+}
+
+function isCrashExit(progress: LaunchProgressEvent | null): boolean {
+  if (progress?.stage !== "exited") return false;
+  const code = parseExitCode(progress.message);
+  return code !== null && code !== 0;
+}
+
+function stageLabel(progress: LaunchProgressEvent | null, isServer: boolean): string {
+  if (!progress) return "running";
+  if (progress.stage === "exited") {
+    if (isCrashExit(progress)) return progress.message.includes("crashed") ? "crashed" : "stopped unexpectedly";
+    return isServer ? "stopped" : "closed";
+  }
+  return progress.stage;
 }
 
 interface Props {
@@ -96,6 +152,8 @@ export function InstanceDetail({
   const isRunning = pid != null;
 
   const [stats, setStats] = useState<ProcessStats | null>(null);
+  const addresses = useServerAddresses(isServer ? instance.id : null);
+  const uptime = useUptime(isServer && isRunning ? stats?.startTime : null);
 
   useEffect(() => {
     if (!isServer || !isRunning || pid == null) {
@@ -251,7 +309,7 @@ export function InstanceDetail({
   useEffect(() => {
     if (progress?.stage === "error") {
       setShowConsole(true);
-    } else if (progress?.stage === "exited" && parseExitCode(progress.message) !== 0) {
+    } else if (isCrashExit(progress)) {
       setShowConsole(true);
     }
   }, [progress]);
@@ -347,7 +405,7 @@ export function InstanceDetail({
     progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
   const isBusy = starting || (progress ? ACTIVE_STAGES.has(progress.stage) : false);
   const crashHint =
-    progress?.stage === "exited" && parseExitCode(progress.message) !== 0 ? findCrashHint(logLines) : null;
+    isCrashExit(progress) ? findCrashHint(logLines) : null;
 
   return (
     <div className="main-panel">
@@ -358,8 +416,23 @@ export function InstanceDetail({
           <div className="meta">
             {instance.versionId} · {instance.loader}
             {instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}
+            {uptime ? ` · up ${uptime}` : ""}
             {!isServer && instance.lastPlayed ? ` · last played ${new Date(instance.lastPlayed).toLocaleString()}` : ""}
           </div>
+          {addresses && (
+            <div className="meta server-address-meta">
+              {addresses.local && (
+                <span title="Local IP - for players on the same network">LAN {addresses.local}</span>
+              )}
+              {addresses.local && addresses.public && " · "}
+              {addresses.public && (
+                <span title={addresses.isDomain ? "Domain - what players outside your network use" : "Public IP - for players outside your network"}>
+                  {addresses.isDomain ? "" : "Public "}
+                  {addresses.public}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="instance-header-actions">
           <button className="danger-btn" onClick={() => onDelete(instance.id)}>
@@ -428,7 +501,7 @@ export function InstanceDetail({
             )}
             <div className="progress-card-row">
               <div className="progress-card-main">
-                <div className="stage">{progress?.stage ?? "running"}</div>
+                <div className="stage">{stageLabel(progress, isServer)}</div>
                 <div>{progress?.message ?? (isServer ? "Server is running" : "Minecraft is running")}</div>
               </div>
               {isServer && isRunning && (stats || playerCount || tps) && (

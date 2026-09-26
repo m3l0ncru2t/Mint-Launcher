@@ -11,6 +11,34 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Undoes Java `.properties` escaping on a value - vanilla writes a MOTD's
+/// `§` as `\u00A7`, newlines as `\n`, and escapes `:`/`=`/`\\`.
+pub fn unescape_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => {}
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    Some(ch) => out.push(ch),
+                    None => out.push_str(&hex),
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
 pub fn read_properties(game_dir: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let Ok(contents) = std::fs::read_to_string(game_dir.join("server.properties")) else {

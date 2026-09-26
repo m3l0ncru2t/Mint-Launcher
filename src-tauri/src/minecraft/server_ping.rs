@@ -171,7 +171,8 @@ fn apply_legacy_code(code: char, style: &mut Style) {
         'f' => "white",
         _ => "",
     }) {
-        style.color = Some(hex.to_string());
+        // As in game, a color code also clears bold/italic/etc.
+        *style = Style { color: Some(hex.to_string()), ..Style::default() };
         return;
     }
     match code {
@@ -206,6 +207,14 @@ fn parse_legacy_text(text: &str, base: Style, out: &mut Vec<TextRun>) {
     if !current.is_empty() {
         out.push(to_run(current, &style));
     }
+}
+
+/// A `server.properties` MOTD (plain text with `§` codes) as styled runs -
+/// the same shape a live ping's description turns into.
+pub fn parse_legacy_motd(text: &str) -> Vec<TextRun> {
+    let mut out = Vec::new();
+    parse_legacy_text(text, Style::default(), &mut out);
+    out
 }
 
 fn to_run(text: String, style: &Style) -> TextRun {

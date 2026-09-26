@@ -89,6 +89,24 @@ pub async fn set_remote_admin_tunnel_enabled(state: State<'_, AppState>, enabled
     settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_server_domain(state: State<'_, AppState>, instance_id: String) -> Result<Option<String>, String> {
+    Ok(state.settings.lock().await.server_domains.get(&instance_id).cloned())
+}
+
+/// Empty clears it.
+#[tauri::command]
+pub async fn set_server_domain(state: State<'_, AppState>, instance_id: String, domain: String) -> Result<(), String> {
+    let mut current = state.settings.lock().await;
+    let domain = domain.trim().to_string();
+    if domain.is_empty() {
+        current.server_domains.remove(&instance_id);
+    } else {
+        current.server_domains.insert(instance_id, domain);
+    }
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
 /// This install's Mint Connect code - what an owner gives their admins.
 #[tauri::command]
 pub fn get_tunnel_code(state: State<AppState>) -> Result<String, String> {

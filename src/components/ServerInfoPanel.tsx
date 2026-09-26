@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import type { ServerInfo } from "../types";
+import { Motd } from "./Motd";
+import { getPublicIpCached } from "../lib/publicIp";
+import { formatDuration, useUptime } from "../lib/uptime";
 
 interface Props {
   /** Keys the saved domain - a local instance id or a remote link id. */
@@ -14,12 +17,6 @@ interface Props {
   remote?: boolean;
 }
 
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  if (h >= 24) return `${Math.floor(h / 24)}d ${h % 24}h`;
-  if (h >= 1) return `${h}h ${Math.floor((seconds % 3600) / 60)}m`;
-  return `${Math.floor(seconds / 60)}m`;
-}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -27,21 +24,33 @@ function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`;
 }
 
-// The machine's public IP is the same for every server tab - looked up once
-// per launcher run instead of on every tab open.
-let publicIpCache: Promise<string> | null = null;
 
-const domainKey = (id: string) => `mint.serverDomain.${id}`;
+// Where the domain used to live (this machine's app storage only) before it
+// moved into Mint's settings so remote admins can see it too - read once to
+// carry an already-entered domain over.
+const legacyDomainKey = (id: string) => `mint.serverDomain.${id}`;
 
-function loadDomain(id: string): string {
+function takeLegacyDomain(id: string): string {
   try {
-    return localStorage.getItem(domainKey(id)) ?? "";
+    const value = localStorage.getItem(legacyDomainKey(id)) ?? "";
+    localStorage.removeItem(legacyDomainKey(id));
+    return value;
   } catch {
     return "";
   }
 }
 
-export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote = false }: Props) {
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "Unknown" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+export function ServerInfoPanel({
+  instanceId,
+  isRunning,
+  load: loadInfo,
+  remote = false,
+}: Props) {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [publicIp, setPublicIp] = useState<string | null>(null);
   const [publicIpError, setPublicIpError] = useState(false);
@@ -50,13 +59,28 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
   const [editingDomain, setEditingDomain] = useState(false);
   const [domainDraft, setDomainDraft] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const uptime = useUptime(isRunning ? info?.startedAt : null);
 
   useEffect(() => {
     setInfo(null);
     setPublicIp(null);
     setShowPublic(true);
-    setDomain(loadDomain(instanceId));
+    setDomain("");
     setEditingDomain(false);
+    if (!remote) {
+      api
+        .getServerDomain(instanceId)
+        .then(async (saved) => {
+          let value = saved ?? "";
+          const legacy = takeLegacyDomain(instanceId);
+          if (!value && legacy) {
+            await api.setServerDomain(instanceId, legacy);
+            value = legacy;
+          }
+          setDomain(value);
+        })
+        .catch(() => {});
+    }
     if (!remote) lookupPublicIp();
     let cancelled = false;
     const load = () =>
@@ -64,7 +88,10 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
         .then((i) => {
           if (cancelled) return;
           setInfo(i);
-          if (remote) setPublicIp(i.publicIp ?? null);
+          if (remote) {
+            setPublicIp(i.publicIp ?? null);
+            setDomain(i.domain ?? "");
+          }
         })
         .catch(() => {});
     load();
@@ -77,11 +104,9 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
 
   function lookupPublicIp() {
     setPublicIpError(false);
-    publicIpCache ??= api.getPublicIp();
-    publicIpCache.then(setPublicIp).catch(() => {
-      publicIpCache = null;
-      setPublicIpError(true);
-    });
+    getPublicIpCached()
+      .then(setPublicIp)
+      .catch(() => setPublicIpError(true));
   }
 
   // Shown by default; Hide is there for screen-shares/streams.
@@ -92,15 +117,18 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
 
   function saveDomain() {
     // Strip a pasted scheme/port/path - only the hostname is kept.
-    const cleaned = domainDraft.trim().replace(/^[a-z]+:\/\//i, "").replace(/[:/].*$/, "");
-    try {
-      if (cleaned) localStorage.setItem(domainKey(instanceId), cleaned);
-      else localStorage.removeItem(domainKey(instanceId));
-    } catch {
-      // Storage unavailable - the domain just won't be remembered.
-    }
-    setDomain(cleaned);
-    setEditingDomain(false);
+    const cleaned = domainDraft
+      .trim()
+      .replace(/^[a-z]+:\/\//i, "")
+      .replace(/[:/].*$/, "");
+    api
+      .setServerDomain(instanceId, cleaned)
+      .then(() => {
+        setDomain(cleaned);
+        setEditingDomain(false);
+        window.dispatchEvent(new CustomEvent("mint-server-domain-changed", { detail: instanceId }));
+      })
+      .catch(() => {});
   }
 
   function copy(text: string, key: string) {
@@ -123,10 +151,20 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
           ? "Lookup failed"
           : "Looking up…"
       : "••••••••••";
-  const localShown = info.localIp ? `${info.localIp}:${info.port}` : hiddenByHost ? "Full access only" : "Unknown";
+  const localShown = info.localIp
+    ? `${info.localIp}:${info.port}`
+    : hiddenByHost
+      ? "Full access only"
+      : "Unknown";
 
   return (
     <div className="mods-list server-info">
+      <div className="panel-header players-section-header">
+        <h4>MOTD</h4>
+      </div>
+      <div className="server-info-motd">
+        <Motd runs={info.motd} />
+      </div>
       <div className="panel-header players-section-header">
         <h4>Connect</h4>
       </div>
@@ -134,7 +172,10 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
         <span className="server-info-label">Local IP (same network)</span>
         <span className="server-info-value">{localShown}</span>
         {info.localIp && (
-          <button className="secondary" onClick={() => copy(localShown, "local")}>
+          <button
+            className="secondary"
+            onClick={() => copy(localShown, "local")}
+          >
             {copied === "local" ? "Copied" : "Copy"}
           </button>
         )}
@@ -148,55 +189,74 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
           </button>
         )}
         {showPublic && publicIp && (
-          <button className="secondary" onClick={() => copy(`${publicIp}:${info.port}`, "public")}>
+          <button
+            className="secondary"
+            onClick={() => copy(`${publicIp}:${info.port}`, "public")}
+          >
             {copied === "public" ? "Copied" : "Copy"}
           </button>
         )}
       </div>
-      <div className="mod-row server-info-row">
-        <span className="server-info-label">Domain / DDNS</span>
-        {editingDomain ? (
-          <>
-            <input
-              className="server-info-input"
-              autoFocus
-              value={domainDraft}
-              placeholder="play.example.com"
-              onChange={(e) => setDomainDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveDomain();
-                if (e.key === "Escape") setEditingDomain(false);
-              }}
-            />
-            <button className="secondary" onClick={saveDomain}>
-              Save
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="server-info-value">{domain ? (info.port === 25565 ? domain : `${domain}:${info.port}`) : "Not set"}</span>
-            <button
-              className="secondary"
-              onClick={() => {
-                setDomainDraft(domain);
-                setEditingDomain(true);
-              }}
-            >
-              {domain ? "Edit" : "Set"}
-            </button>
-            {domain && (
-              <button
-                className="secondary"
-                onClick={() => copy(info.port === 25565 ? domain : `${domain}:${info.port}`, "domain")}
-              >
-                {copied === "domain" ? "Copied" : "Copy"}
+      {(!remote || domain) && (
+        <div className="mod-row server-info-row">
+          <span className="server-info-label">Domain / DDNS</span>
+          {editingDomain ? (
+            <>
+              <input
+                className="server-info-input"
+                autoFocus
+                value={domainDraft}
+                placeholder="play.example.com"
+                onChange={(e) => setDomainDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveDomain();
+                  if (e.key === "Escape") setEditingDomain(false);
+                }}
+              />
+              <button className="secondary" onClick={saveDomain}>
+                Save
               </button>
-            )}
-          </>
-        )}
-      </div>
+            </>
+          ) : (
+            <>
+              <span className="server-info-value">
+                {domain
+                  ? info.port === 25565
+                    ? domain
+                    : `${domain}:${info.port}`
+                  : "Not set"}
+              </span>
+              {!remote && (
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setDomainDraft(domain);
+                    setEditingDomain(true);
+                  }}
+                >
+                  {domain ? "Edit" : "Set"}
+                </button>
+              )}
+              {domain && (
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    copy(
+                      info.port === 25565 ? domain : `${domain}:${info.port}`,
+                      "domain",
+                    )
+                  }
+                >
+                  {copied === "domain" ? "Copied" : "Copy"}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
       <div className="placeholder server-info-hint">
-        Friends outside your network need the public IP, and port {info.port} forwarded to this machine on your router.
+        Friends outside your network need the public IP, and port {info.port}{" "}
+        forwarded to this machine on your router.
       </div>
 
       <div className="panel-header players-section-header">
@@ -204,15 +264,31 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
       </div>
       <div className="mod-row server-info-row">
         <span className="server-info-label">Status</span>
-        <span className="server-info-value">{isRunning ? "Running" : "Stopped"}</span>
+        <span className="server-info-value">
+          {isRunning ? "Running" : "Stopped"}
+        </span>
+      </div>
+      <div className="mod-row server-info-row">
+        <span className="server-info-label">Uptime</span>
+        <span className="server-info-value">{uptime ?? "—"}</span>
       </div>
       <div className="mod-row server-info-row">
         <span className="server-info-label">Total players joined</span>
         <span className="server-info-value">{info.totalPlayersJoined}</span>
       </div>
+      {info.worldRunSeconds !== null && (
+        <div className="mod-row server-info-row">
+          <span className="server-info-label">Total hours running</span>
+          <span className="server-info-value">
+            {Math.floor(info.worldRunSeconds / 3600).toLocaleString()}h ({formatDuration(info.worldRunSeconds)})
+          </span>
+        </div>
+      )}
       <div className="mod-row server-info-row">
-        <span className="server-info-label">Total playtime</span>
-        <span className="server-info-value">{formatDuration(info.totalPlaytimeSeconds)}</span>
+        <span className="server-info-label">Total player playtime</span>
+        <span className="server-info-value">
+          {formatDuration(info.totalPlaytimeSeconds)}
+        </span>
       </div>
       {info.topPlayers.length > 0 && (
         <>
@@ -222,7 +298,9 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
           {info.topPlayers.map((p) => (
             <div key={p.name} className="mod-row server-info-row">
               <span className="server-info-label">{p.name}</span>
-              <span className="server-info-value">{formatDuration(p.playtimeSeconds)}</span>
+              <span className="server-info-value">
+                {formatDuration(p.playtimeSeconds)}
+              </span>
             </div>
           ))}
         </>
@@ -237,12 +315,28 @@ export function ServerInfoPanel({ instanceId, isRunning, load: loadInfo, remote 
           {info.levelName} ({formatBytes(info.worldSizeBytes)})
         </span>
       </div>
+      {info.worldCreated && (
+        <div className="mod-row server-info-row">
+          <span className="server-info-label">World created</span>
+          <span className="server-info-value">{formatDate(info.worldCreated)}</span>
+        </div>
+      )}
+      <div className="mod-row server-info-row">
+        <span className="server-info-label">Added to Mint</span>
+        <span className="server-info-value">{formatDate(info.addedToMint)}</span>
+      </div>
+      <div className="mod-row server-info-row">
+        <span className="server-info-label">Last started from Mint</span>
+        <span className="server-info-value">{info.lastStarted ? formatDate(info.lastStarted) : "Never"}</span>
+      </div>
       <div className="mod-row server-info-row">
         <span className="server-info-label">Mods</span>
         <span className="server-info-value">{info.modCount}</span>
       </div>
       <div className="mod-row server-info-row">
-        <span className="server-info-label">Operators / Whitelisted / Banned</span>
+        <span className="server-info-label">
+          Operators / Whitelisted / Banned
+        </span>
         <span className="server-info-value">
           {info.opCount} / {info.whitelistCount} / {info.banCount}
         </span>

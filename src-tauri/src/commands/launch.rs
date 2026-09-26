@@ -532,6 +532,10 @@ pub struct ProcessStats {
     /// to its own `-Xmx`.
     pub system_used_memory_mb: u64,
     pub system_total_memory_mb: u64,
+    /// When the process started (unix seconds) - for showing uptime. Read
+    /// from the OS, so it's right even for a server Mint adopted after a
+    /// relaunch rather than started itself.
+    pub start_time: u64,
 }
 
 /// Live CPU/memory for a running instance's process - meant to be polled
@@ -552,7 +556,17 @@ pub async fn get_process_stats(state: State<'_, AppState>, pid: u32) -> Result<P
         memory_mb: process.memory() / (1024 * 1024),
         system_used_memory_mb: sys.used_memory() / (1024 * 1024),
         system_total_memory_mb: sys.total_memory() / (1024 * 1024),
+        start_time: process.start_time(),
     })
+}
+
+/// Start time (unix seconds) of a running instance's process, if it's running.
+pub(crate) async fn instance_start_time(state: &AppState, instance_id: &str) -> Option<u64> {
+    let pid = state.running_instances.lock().await.get(instance_id)?.pid;
+    let mut sys = state.process_stats.lock().await;
+    let sys_pid = sysinfo::Pid::from_u32(pid);
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sys_pid]), false);
+    sys.process(sys_pid).map(|p| p.start_time())
 }
 
 /// Looks for a Java process whose working directory matches this server
@@ -806,6 +820,7 @@ async fn do_launch(
         .split_whitespace()
         .map(str::to_string)
         .collect();
+    let started = std::time::SystemTime::now();
     let exit_code = mc_launch::spawn_and_stream(
         app,
         state,
@@ -824,7 +839,7 @@ async fn do_launch(
         download::DownloadProgress {
             instance_id: instance_id.to_string(),
             stage: "exited".to_string(),
-            message: format!("Minecraft exited with code {exit_code}"),
+            message: crate::minecraft::exit_info::describe("Minecraft", exit_code, &game_dir, started),
             current: 1,
             total: 1,
         },
@@ -905,6 +920,7 @@ async fn do_launch_server(app: &tauri::AppHandle, state: &AppState, inst: &insta
         .split_whitespace()
         .map(str::to_string)
         .collect();
+    let started = std::time::SystemTime::now();
     let exit_code = server_launch::spawn_and_stream_server(
         app,
         state,
@@ -922,7 +938,7 @@ async fn do_launch_server(app: &tauri::AppHandle, state: &AppState, inst: &insta
         download::DownloadProgress {
             instance_id: instance_id.to_string(),
             stage: "exited".to_string(),
-            message: format!("Server exited with code {exit_code}"),
+            message: crate::minecraft::exit_info::describe("Server", exit_code, &game_dir, started),
             current: 1,
             total: 1,
         },

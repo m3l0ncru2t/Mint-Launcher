@@ -179,6 +179,8 @@ export interface ProcessStats {
   memoryMb: number;
   systemUsedMemoryMb: number;
   systemTotalMemoryMb: number;
+  /** Unix seconds the process started. */
+  startTime: number;
 }
 
 export interface RestartCountdownEvent {
@@ -370,6 +372,13 @@ export interface ServerInfo {
   localIp: string | null;
   port: number;
   levelName: string;
+  motd: TextRun[];
+  /** Unix seconds the server process started, while running. */
+  startedAt: number | null;
+  addedToMint: string;
+  lastStarted: string | null;
+  worldCreated: string | null;
+  worldRunSeconds: number | null;
   totalPlayersJoined: number;
   totalPlaytimeSeconds: number;
   topPlayers: { name: string; playtimeSeconds: number }[];
@@ -383,4 +392,6 @@ export interface ServerInfo {
    * see the host's addresses at all. */
   publicIp?: string | null;
   ipsHidden?: boolean;
+  /** Remote view only: the owner's domain/DDNS name, if they set one. */
+  domain?: string | null;
 }

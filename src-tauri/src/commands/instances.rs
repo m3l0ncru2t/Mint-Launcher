@@ -1057,6 +1057,22 @@ pub struct ServerInfo {
     pub local_ip: Option<String>,
     pub port: u16,
     pub level_name: String,
+    /// From server.properties (so it shows while stopped too), `§` codes
+    /// already turned into styled runs.
+    pub motd: Vec<crate::minecraft::server_ping::TextRun>,
+    /// Unix seconds the server process started, while it's running.
+    pub started_at: Option<u64>,
+    /// When this instance was created in (or imported into) Mint.
+    pub added_to_mint: String,
+    /// Last time Mint started it.
+    pub last_started: Option<String>,
+    /// When the world folder was created on disk - the closest thing to a
+    /// "server created" date, since it predates Mint for an imported server.
+    /// `None` where the filesystem doesn't record creation times.
+    pub world_created: Option<String>,
+    /// Total time the server has had this world running, from the world's
+    /// own tick counter - includes time from before Mint managed it.
+    pub world_run_seconds: Option<u64>,
     /// Players who have ever joined - one stats file per player in the world.
     pub total_players_joined: usize,
     pub total_playtime_seconds: u64,
@@ -1087,6 +1103,21 @@ fn dir_size(dir: &std::path::Path) -> u64 {
             _ => 0,
         })
         .sum()
+}
+
+/// `Data.Time` from level.dat: ticks the world has ever run (it only
+/// advances while the server is up, and survives restarts). Rather than a
+/// full NBT parser, this finds the one Long tag named exactly "Time" - the
+/// 2-byte length prefix makes the name match exact, so `DayTime` etc. don't
+/// collide.
+fn world_ticks(world: &std::path::Path) -> Option<u64> {
+    let file = std::fs::File::open(world.join("level.dat")).ok()?;
+    let mut data = Vec::new();
+    flate2::read::GzDecoder::new(file).take(16 * 1024 * 1024).read_to_end(&mut data).ok()?;
+    const TAG: &[u8] = b"\x04\x00\x04Time";
+    let at = data.windows(TAG.len()).position(|w| w == TAG)? + TAG.len();
+    let value = i64::from_be_bytes(data.get(at..at + 8)?.try_into().ok()?);
+    u64::try_from(value).ok()
 }
 
 pub(crate) fn collect_server_info(inst: &Instance, instances_dir: &std::path::Path) -> ServerInfo {
@@ -1134,10 +1165,23 @@ pub(crate) fn collect_server_info(inst: &Instance, instances_dir: &std::path::Pa
     players.sort_by(|a, b| b.playtime_seconds.cmp(&a.playtime_seconds));
     players.truncate(5);
 
+    let motd = crate::minecraft::server_ping::parse_legacy_motd(&crate::minecraft::server_properties::unescape_value(
+        props.get("motd").map(String::as_str).unwrap_or("A Minecraft Server"),
+    ));
+
     ServerInfo {
         local_ip: local_ip(),
         port,
         level_name,
+        motd,
+        started_at: None,
+        added_to_mint: inst.created_at.clone(),
+        last_started: inst.last_played.clone(),
+        world_run_seconds: world_ticks(&world).map(|t| t / 20),
+        world_created: std::fs::metadata(&world)
+            .and_then(|m| m.created())
+            .ok()
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()),
         total_players_joined,
         total_playtime_seconds,
         top_players: players,
@@ -1158,9 +1202,11 @@ pub async fn get_server_info(state: State<'_, AppState>, id: String) -> Result<S
         return Err("This isn't a server instance".to_string());
     }
     let instances_dir = state.instances_dir();
-    tauri::async_runtime::spawn_blocking(move || collect_server_info(&inst, &instances_dir))
+    let mut info = tauri::async_runtime::spawn_blocking(move || collect_server_info(&inst, &instances_dir))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    info.started_at = crate::commands::launch::instance_start_time(&state, &id).await;
+    Ok(info)
 }
 
 /// The machine's internet-facing address, as an outside service sees it.
@@ -1184,4 +1230,23 @@ pub(crate) async fn lookup_public_ip(http: &reqwest::Client) -> Result<String, S
 #[tauri::command]
 pub async fn get_public_ip(state: State<'_, AppState>) -> Result<String, String> {
     lookup_public_ip(&state.http).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerAddresses {
+    pub local_ip: Option<String>,
+    pub port: u16,
+    pub domain: Option<String>,
+}
+
+/// Just the connect details for the instance header - cheap, unlike
+/// `get_server_info` (which walks the world folder).
+#[tauri::command]
+pub async fn get_server_addresses(state: State<'_, AppState>, id: String) -> Result<ServerAddresses, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let props = crate::minecraft::server_properties::read_properties(&inst.game_dir(&state.instances_dir()));
+    let port = props.get("server-port").and_then(|p| p.parse().ok()).unwrap_or(25565);
+    let domain = state.settings.lock().await.server_domains.get(&id).cloned();
+    Ok(ServerAddresses { local_ip: local_ip(), port, domain })
 }

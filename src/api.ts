@@ -72,6 +72,10 @@ export const api = {
 
   openFolder: (path: string) => invoke<void>("open_folder", { path }),
 
+  getServerDomain: (instanceId: string) => invoke<string | null>("get_server_domain", { instanceId }),
+  setServerDomain: (instanceId: string, domain: string) => invoke<void>("set_server_domain", { instanceId, domain }),
+  getServerAddresses: (id: string) =>
+    invoke<{ localIp: string | null; port: number; domain: string | null }>("get_server_addresses", { id }),
   getServerInfo: (id: string) => invoke<ServerInfo>("get_server_info", { id }),
   getPublicIp: () => invoke<string>("get_public_ip"),
   getServerProperties: (id: string) => invoke<Record<string, string>>("get_server_properties", { id }),

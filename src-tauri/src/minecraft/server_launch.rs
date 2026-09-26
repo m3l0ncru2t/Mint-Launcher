@@ -141,5 +141,5 @@ pub async fn spawn_and_stream_server(
         serde_json::json!({ "instanceId": instance_id, "running": false }),
     );
 
-    Ok(status.code().unwrap_or(-1))
+    Ok(super::exit_info::exit_code(&status))
 }

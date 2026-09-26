@@ -2246,3 +2246,17 @@ button {
   margin-left: auto;
   cursor: pointer;
 }
+.server-info-motd {
+  background: #1a1a1a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0 0 4px;
+  font-family: monospace;
+  white-space: pre;
+  overflow-x: auto;
+  color: #aaaaaa;
+}
+.server-address-meta {
+  user-select: text;
+  margin-top: 2px;
+}

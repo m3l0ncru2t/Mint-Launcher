@@ -87,6 +87,11 @@ pub struct Settings {
     /// (still login-gated by the Mojang handshake + ops list, like always).
     #[serde(default)]
     pub remote_admin_tunnel_enabled: bool,
+    /// Instance id -> the domain/DDNS name players use to reach that server,
+    /// as the owner entered it on the Server tab - also shown to remote
+    /// admins of that server.
+    #[serde(default)]
+    pub server_domains: std::collections::HashMap<String, String>,
     /// Which layout `InstanceDetail`/`RemoteInstanceDetail` use for the area
     /// below the header - `false` (default) is the padded/boxed look local
     /// instances have always had; `true` removes that padding for a more
@@ -117,6 +122,7 @@ impl Default for Settings {
             remote_admin_instance_id: None,
             remote_admin_full_access_uuids: Vec::new(),
             remote_admin_tunnel_enabled: false,
+            server_domains: std::collections::HashMap::new(),
             spacious_instance_view: false,
         }
     }

@@ -1201,6 +1201,9 @@ struct RemoteServerInfo {
     public_ip: Option<String>,
     /// True when this admin isn't allowed the host's addresses (see below).
     ips_hidden: bool,
+    /// The owner's domain/DDNS name for this server, if they set one - it's
+    /// the address players are meant to use, so every op sees it.
+    domain: Option<String>,
 }
 
 /// The Server tab's numbers. The host's IP addresses are only included for
@@ -1208,8 +1211,9 @@ struct RemoteServerInfo {
 /// be deliberately keeping its real address private even from its ops.
 async fn server_info(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<RemoteServerInfo>, ApiError> {
     let session = require_session(&app, &headers).await?;
-    let (inst, _) = shared_instance(&app).await?;
+    let (inst, id) = shared_instance(&app).await?;
     let full = has_full_access(&app, &session).await;
+    let domain = app.state::<AppState>().settings.lock().await.server_domains.get(&id).cloned();
     let state = app.state::<AppState>();
     let instances_dir = state.instances_dir();
     let mut info = tauri::async_runtime::spawn_blocking(move || {
@@ -1217,13 +1221,14 @@ async fn server_info(State(app): State<AppHandle>, headers: HeaderMap) -> Result
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    info.started_at = commands::launch::instance_start_time(&state, &id).await;
     let public_ip = if full {
         commands::instances::lookup_public_ip(&state.http).await.ok()
     } else {
         info.local_ip = None;
         None
     };
-    Ok(Json(RemoteServerInfo { info, public_ip, ips_hidden: !full }))
+    Ok(Json(RemoteServerInfo { info, public_ip, ips_hidden: !full, domain }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,20 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Instance, ServerEntry, ServerStatus, TextRun } from "../types";
-
-/** Splits styled MOTD runs into lines on literal newlines - servers use
- * these to lay the MOTD out in two lines with deliberate spacing/centering,
- * which a single wrapped block of text would otherwise flatten away. */
-function splitMotdLines(runs: TextRun[]): TextRun[][] {
-  const lines: TextRun[][] = [[]];
-  for (const run of runs) {
-    run.text.split("\n").forEach((part, i) => {
-      if (i > 0) lines.push([]);
-      if (part.length > 0) lines[lines.length - 1].push({ ...run, text: part });
-    });
-  }
-  return lines;
-}
+import type { Instance, ServerEntry, ServerStatus } from "../types";
+import { Motd } from "./Motd";
 
 interface Props {
   instance: Instance;
@@ -208,32 +195,7 @@ function ServerRow({ server, joinDisabled, onJoin, onRemove, onRename }: ServerR
         {pinging && <div className="server-motd hint-inline">Pinging…</div>}
         {!pinging && failed && <div className="server-motd server-offline">Offline or unreachable</div>}
         {!pinging && status && (
-          <div className="server-motd">
-            {status.motd.length > 0
-              ? splitMotdLines(status.motd)
-                  .slice(0, 2)
-                  .map((line, li) => (
-                  <div key={li} className="server-motd-line">
-                    {line.map((run, i) => (
-                      <span
-                        key={i}
-                        style={{
-                          color: run.color ?? undefined,
-                          fontWeight: run.bold ? 700 : undefined,
-                          fontStyle: run.italic ? "italic" : undefined,
-                          textDecoration:
-                            [run.underlined && "underline", run.strikethrough && "line-through"]
-                              .filter(Boolean)
-                              .join(" ") || undefined,
-                        }}
-                      >
-                        {run.text}
-                      </span>
-                    ))}
-                  </div>
-                ))
-              : "A Minecraft Server"}
-          </div>
+          <Motd runs={status.motd} />
         )}
       </div>
       <div className="server-actions">
