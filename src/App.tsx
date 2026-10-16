@@ -41,6 +41,7 @@ export default function App() {
     microsoftClientId: null,
     backgroundTheme: null,
     themeOpacity: {},
+    textColors: {},
     customBackgroundNames: {},
     experimentalServerInstances: false,
     experimentalConfigsLogsTabs: false,
@@ -184,6 +185,16 @@ export default function App() {
     document.documentElement.style.setProperty("--sidebar-alpha", String(entry?.sidebar ?? fallback.sidebar));
     document.documentElement.style.setProperty("--mods-panel-alpha", String(entry?.modsPanel ?? fallback.modsPanel));
   }, [settings.backgroundTheme, settings.themeOpacity]);
+
+  // Custom text colors override the stylesheet's --text-* defaults.
+  useEffect(() => {
+    const vars: Record<string, string> = { primary: "--text-0", secondary: "--text-1", muted: "--text-2" };
+    const colors = settings.textColors ?? {};
+    for (const [key, cssVar] of Object.entries(vars)) {
+      if (colors[key]) document.documentElement.style.setProperty(cssVar, colors[key]);
+      else document.documentElement.style.removeProperty(cssVar);
+    }
+  }, [settings.textColors]);
 
   function dismissProgress(instanceId: string) {
     setProgressByInstance((prev) => {

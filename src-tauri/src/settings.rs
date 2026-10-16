@@ -43,6 +43,10 @@ pub struct Settings {
     /// entry here just uses `ThemeOpacity::default()`.
     #[serde(default)]
     pub theme_opacity: HashMap<String, ThemeOpacity>,
+    /// Custom text colors ("primary"/"secondary"/"muted" -> "#rrggbb"),
+    /// applied over every theme. A missing key means that color's default.
+    #[serde(default)]
+    pub text_colors: HashMap<String, String>,
     /// Display names for custom backgrounds, keyed by their id - a custom
     /// background with no entry here shows as plain "Custom".
     #[serde(default)]
@@ -114,6 +118,7 @@ impl Default for Settings {
             last_account_id: None,
             background_theme: None,
             theme_opacity: HashMap::new(),
+            text_colors: HashMap::new(),
             custom_background_names: HashMap::new(),
             experimental_server_instances: false,
             experimental_configs_logs_tabs: false,

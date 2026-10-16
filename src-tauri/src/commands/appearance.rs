@@ -25,6 +25,28 @@ pub async fn set_background_theme(state: State<'_, AppState>, theme: Option<Stri
 /// Saves the sidebar/addon-list transparency for one specific theme id, so
 /// switching themes later recalls its own look instead of a shared global
 /// setting.
+/// Sets (or, with `None`, resets) one of the custom text colors.
+#[tauri::command]
+pub async fn set_text_color(state: State<'_, AppState>, key: String, color: Option<String>) -> Result<(), String> {
+    if !matches!(key.as_str(), "primary" | "secondary" | "muted") {
+        return Err("Unknown text color".to_string());
+    }
+    let mut current = state.settings.lock().await;
+    match color {
+        Some(c) => {
+            let valid = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit());
+            if !valid {
+                return Err("Colors must look like #rrggbb".to_string());
+            }
+            current.text_colors.insert(key, c.to_lowercase());
+        }
+        None => {
+            current.text_colors.remove(&key);
+        }
+    }
+    settings::save(&state.settings_path(), &current).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn set_theme_opacity(
     state: State<'_, AppState>,

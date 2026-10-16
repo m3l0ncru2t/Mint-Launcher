@@ -127,6 +127,8 @@ export interface Settings {
   microsoftClientId: string | null;
   backgroundTheme: string | null;
   themeOpacity: Record<string, ThemeOpacity>;
+  /** "primary" | "secondary" | "muted" -> "#rrggbb"; missing = default. */
+  textColors: Record<string, string>;
   customBackgroundNames: Record<string, string>;
   experimentalServerInstances: boolean;
   experimentalConfigsLogsTabs: boolean;
@@ -394,4 +396,10 @@ export interface ServerInfo {
   ipsHidden?: boolean;
   /** Remote view only: the owner's domain/DDNS name, if they set one. */
   domain?: string | null;
+}
+
+export interface ScreenshotFile {
+  fileName: string;
+  size: number;
+  modifiedAt: string | null;
 }

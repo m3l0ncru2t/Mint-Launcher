@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../api";
+import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InstanceFilesPanel } from "./InstanceFilesPanel";
 import { InstanceIcon } from "./InstanceIcon";
@@ -412,21 +413,21 @@ export function InstanceDetail({
       <div className="instance-header">
         <InstanceIcon instance={instance} className="instance-header-icon" />
         <div className="instance-header-text">
-          <h2>{instance.name}</h2>
-          <div className="meta">
+          <h2 onMouseEnter={showFullTextIfTruncated}>{instance.name}</h2>
+          <div className="meta" onMouseEnter={showFullTextIfTruncated}>
             {instance.versionId} · {instance.loader}
             {instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}
             {uptime ? ` · up ${uptime}` : ""}
             {!isServer && instance.lastPlayed ? ` · last played ${new Date(instance.lastPlayed).toLocaleString()}` : ""}
           </div>
           {addresses && (
-            <div className="meta server-address-meta">
+            <div className="meta server-address-meta" onMouseEnter={showFullTextIfTruncated}>
               {addresses.local && (
-                <span title="Local IP - for players on the same network">LAN {addresses.local}</span>
+                <span title={`Local IP - for players on the same network: ${addresses.local}`}>LAN {addresses.local}</span>
               )}
               {addresses.local && addresses.public && " · "}
               {addresses.public && (
-                <span title={addresses.isDomain ? "Domain - what players outside your network use" : "Public IP - for players outside your network"}>
+                <span title={`${addresses.isDomain ? "Domain - what players outside your network use" : "Public IP - for players outside your network"}: ${addresses.public}`}>
                   {addresses.isDomain ? "" : "Public "}
                   {addresses.public}
                 </span>

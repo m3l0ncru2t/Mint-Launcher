@@ -6,6 +6,7 @@ import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
 import { ServerInfoPanel } from "./ServerInfoPanel";
+import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
 import { RemoteBrowseModsDialog } from "./RemoteBrowseModsDialog";
@@ -197,8 +198,8 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
           </div>
         )}
         <div className="instance-header-text">
-          <h2>{link.name}</h2>
-          <div className="meta">
+          <h2 onMouseEnter={showFullTextIfTruncated}>{link.name}</h2>
+          <div className="meta" onMouseEnter={showFullTextIfTruncated}>
             {link.versionId} · {link.loader}{link.nodeId ? "" : ` · ${link.host}:${link.port}`}
           </div>
         </div>

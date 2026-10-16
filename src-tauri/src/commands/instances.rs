@@ -1250,3 +1250,280 @@ pub async fn get_server_addresses(state: State<'_, AppState>, id: String) -> Res
     let domain = state.settings.lock().await.server_domains.get(&id).cloned();
     Ok(ServerAddresses { local_ip: local_ip(), port, domain })
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotFile {
+    pub file_name: String,
+    pub size: u64,
+    pub modified_at: Option<String>,
+}
+
+/// A client instance's `screenshots` folder, newest first. The images
+/// themselves come through `get_screenshot_thumbnail`/`read_screenshot`.
+#[tauri::command]
+pub async fn list_screenshots(state: State<'_, AppState>, id: String) -> Result<Vec<ScreenshotFile>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.game_dir(&state.instances_dir()).join("screenshots");
+    let files = tauri::async_runtime::spawn_blocking({
+        let dir = dir.clone();
+        move || -> Vec<ScreenshotFile> {
+            let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+            let mut files: Vec<ScreenshotFile> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let lower = name.to_lowercase();
+                    if !(lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+                        return None;
+                    }
+                    let meta = e.metadata().ok().filter(|m| m.is_file())?;
+                    Some(ScreenshotFile {
+                        file_name: name,
+                        size: meta.len(),
+                        modified_at: meta.modified().ok().map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()),
+                    })
+                })
+                .collect();
+            files.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+            files
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(files)
+}
+
+const THUMB_WIDTH: u32 = 320;
+
+fn image_mime(file_name: &str) -> &'static str {
+    if file_name.to_lowercase().ends_with(".png") { "image/png" } else { "image/jpeg" }
+}
+
+/// Box-filter downscale of a PNG to `THUMB_WIDTH` wide, re-encoded as PNG.
+fn make_png_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let channels = match info.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Grayscale => 1,
+        _ => return None,
+    };
+    let (w, h) = (info.width, info.height);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let tw = THUMB_WIDTH.min(w);
+    let th = ((h as u64 * tw as u64) / w as u64).max(1) as u32;
+    let mut out = Vec::with_capacity((tw * th * 3) as usize);
+    for ty in 0..th {
+        let y0 = ty * h / th;
+        let y1 = ((ty + 1) * h / th).max(y0 + 1);
+        for tx in 0..tw {
+            let x0 = tx * w / tw;
+            let x1 = ((tx + 1) * w / tw).max(x0 + 1);
+            let mut sum = [0u32; 3];
+            let mut n = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = ((y * w + x) as usize) * channels;
+                    let px = match channels {
+                        1 | 2 => [buf[i]; 3],
+                        _ => [buf[i], buf[i + 1], buf[i + 2]],
+                    };
+                    for c in 0..3 {
+                        sum[c] += px[c] as u32;
+                    }
+                    n += 1;
+                }
+            }
+            out.extend(sum.iter().map(|s| (s / n) as u8));
+        }
+    }
+    let mut png_out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png_out, tw, th);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().ok()?;
+        writer.write_image_data(&out).ok()?;
+    }
+    Some(png_out)
+}
+
+/// A small preview of one screenshot as a data URL. Thumbnails are cached in
+/// the data folder keyed by the file's path, size and modified time, so
+/// each one is only ever decoded once.
+#[tauri::command]
+pub async fn get_screenshot_thumbnail(state: State<'_, AppState>, id: String, file_name: String) -> Result<String, String> {
+    use std::hash::{Hash, Hasher};
+    let inst = resolve_instance(&state, &id)?;
+    let path = safe_child(&inst.game_dir(&state.instances_dir()).join("screenshots"), &file_name)?;
+    let cache_dir = state.data_dir.join("cache").join("screenshot-thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut hasher);
+        meta.len().hash(&mut hasher);
+        meta.modified().ok().hash(&mut hasher);
+        let cached = cache_dir.join(format!("{:016x}.png", hasher.finish()));
+        if let Ok(bytes) = std::fs::read(&cached) {
+            return Ok(format!("data:image/png;base64,{}", STANDARD.encode(bytes)));
+        }
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        match make_png_thumbnail(&bytes) {
+            Some(thumb) => {
+                let _ = std::fs::create_dir_all(&cache_dir);
+                let _ = std::fs::write(&cached, &thumb);
+                Ok(format!("data:image/png;base64,{}", STANDARD.encode(thumb)))
+            }
+            // Not a PNG we can decode (a JPEG, say) - the original will do.
+            None => Ok(format!("data:{};base64,{}", image_mime(&file_name), STANDARD.encode(bytes))),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One screenshot at full size, as a data URL - only fetched when it's opened.
+#[tauri::command]
+pub async fn read_screenshot(state: State<'_, AppState>, id: String, file_name: String) -> Result<String, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let path = safe_child(&inst.game_dir(&state.instances_dir()).join("screenshots"), &file_name)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        Ok(format!("data:{};base64,{}", image_mime(&file_name), STANDARD.encode(bytes)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+pub fn delete_screenshot(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.game_dir(&state.instances_dir()).join("screenshots");
+    let path = safe_child(&dir, &file_name)?;
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn get_screenshots_dir(state: State<AppState>, id: String) -> Result<String, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.game_dir(&state.instances_dir()).join("screenshots");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+fn screenshot_path(state: &AppState, id: &str, file_name: &str) -> Result<std::path::PathBuf, String> {
+    let inst = resolve_instance(state, id)?;
+    safe_child(&inst.game_dir(&state.instances_dir()).join("screenshots"), file_name)
+}
+
+/// Puts a screenshot on the system clipboard as an image, ready to paste
+/// into Discord etc. Done here rather than in the webview, whose clipboard
+/// image support isn't dependable on Linux.
+#[tauri::command]
+pub async fn copy_screenshot(state: State<'_, AppState>, id: String, file_name: String) -> Result<(), String> {
+    let path = screenshot_path(&state, &id, &file_name)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut reader = decoder.read_info().map_err(|_| "Only PNG screenshots can be copied".to_string())?;
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+        let rgba: Vec<u8> = match info.color_type {
+            png::ColorType::Rgba => buf[..(info.width * info.height * 4) as usize].to_vec(),
+            png::ColorType::Rgb => buf[..(info.width * info.height * 3) as usize]
+                .chunks_exact(3)
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect(),
+            _ => return Err("Unsupported screenshot format".to_string()),
+        };
+        clipboard_set_image(info.width as usize, info.height as usize, rgba)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One clipboard handle for the whole run: on Linux the clipboard's contents
+/// are served by whoever owns them, so dropping the handle right after
+/// setting the image would make the paste come up empty.
+fn clipboard_set_image(width: usize, height: usize, rgba: Vec<u8>) -> Result<(), String> {
+    static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mutex::new(None);
+    let mut guard = CLIPBOARD.lock().map_err(|e| e.to_string())?;
+    if guard.is_none() {
+        *guard = Some(arboard::Clipboard::new().map_err(|e| format!("Couldn't open the clipboard: {e}"))?);
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .set_image(arboard::ImageData { width, height, bytes: std::borrow::Cow::Owned(rgba) })
+        .map_err(|e| format!("Couldn't copy the image: {e}"))
+}
+
+/// Opens a screenshot in the system's default image app.
+#[tauri::command(async)]
+pub fn open_screenshot(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let path = screenshot_path(&state, &id, &file_name)?;
+    #[cfg(target_os = "linux")]
+    let mut cmd = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    };
+    cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Opens the file manager with this screenshot selected (falls back to just
+/// opening the folder where selecting isn't supported).
+#[tauri::command(async)]
+pub fn show_screenshot_in_folder(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let path = screenshot_path(&state, &id, &file_name)?;
+    #[cfg(target_os = "windows")]
+    {
+        return std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return std::process::Command::new("open").arg("-R").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // The freedesktop FileManager1 interface (Nautilus, Dolphin, Nemo...)
+        // opens the folder with the file highlighted.
+        let uri = format!("file://{}", path.display());
+        let selected = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:{uri}"),
+                "string:",
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if selected {
+            return Ok(());
+        }
+        let dir = path.parent().ok_or_else(|| "No folder".to_string())?;
+        std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+}

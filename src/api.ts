@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ScreenshotFile,
   ServerInfo,
   AccountSummary,
   BannedPlayerEntry,
@@ -76,6 +77,16 @@ export const api = {
   setServerDomain: (instanceId: string, domain: string) => invoke<void>("set_server_domain", { instanceId, domain }),
   getServerAddresses: (id: string) =>
     invoke<{ localIp: string | null; port: number; domain: string | null }>("get_server_addresses", { id }),
+  listScreenshots: (id: string) => invoke<ScreenshotFile[]>("list_screenshots", { id }),
+  getScreenshotThumbnail: (id: string, fileName: string) =>
+    invoke<string>("get_screenshot_thumbnail", { id, fileName }),
+  readScreenshot: (id: string, fileName: string) => invoke<string>("read_screenshot", { id, fileName }),
+  copyScreenshot: (id: string, fileName: string) => invoke<void>("copy_screenshot", { id, fileName }),
+  openScreenshot: (id: string, fileName: string) => invoke<void>("open_screenshot", { id, fileName }),
+  showScreenshotInFolder: (id: string, fileName: string) =>
+    invoke<void>("show_screenshot_in_folder", { id, fileName }),
+  deleteScreenshot: (id: string, fileName: string) => invoke<void>("delete_screenshot", { id, fileName }),
+  getScreenshotsDir: (id: string) => invoke<string>("get_screenshots_dir", { id }),
   getServerInfo: (id: string) => invoke<ServerInfo>("get_server_info", { id }),
   getPublicIp: () => invoke<string>("get_public_ip"),
   getServerProperties: (id: string) => invoke<Record<string, string>>("get_server_properties", { id }),
@@ -257,6 +268,7 @@ export const api = {
 
   setBackgroundTheme: (theme: string | null) => invoke<void>("set_background_theme", { theme }),
 
+  setTextColor: (key: string, color: string | null) => invoke<void>("set_text_color", { key, color }),
   setThemeOpacity: (themeId: string, sidebar: number, modsPanel: number) =>
     invoke<void>("set_theme_opacity", { themeId, sidebar, modsPanel }),
 

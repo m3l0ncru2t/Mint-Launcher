@@ -1,6 +1,6 @@
 [package]
 name = "mint-launcher"
-version = "0.4.12"
+version = "0.4.13"
 description = "Mint Launcher - a custom Minecraft launcher"
 authors = ["you"]
 edition = "2021"
@@ -46,6 +46,7 @@ tower-http = { version = "0.7.1", features = ["cors"] }
 rand = "0.10.2"
 iroh = "1.2.0"
 png = "0.17"
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -53,3 +54,16 @@ x11rb = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+# Image decoding/compression is unbearably slow unoptimized - keep it fast in
+# dev builds too (screenshot thumbnails, skin heads). No effect on release.
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3

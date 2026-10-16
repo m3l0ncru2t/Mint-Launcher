@@ -12,6 +12,13 @@ interface Props {
   instances: Instance[];
 }
 
+// Defaults match --text-0/1/2 in App.css.
+const TEXT_COLOR_OPTIONS = [
+  { key: "primary", label: "Main text", desc: "names, headings, values", fallback: "#f1f5f4" },
+  { key: "secondary", label: "Secondary text", desc: "labels, buttons, lists", fallback: "#b7c2c0" },
+  { key: "muted", label: "Muted text", desc: "hints, details, dates", fallback: "#7c8a88" },
+];
+
 export function SettingsDialog({ profile, settings, onSettingsChange, onClose, instances }: Props) {
   const [showSkinCape, setShowSkinCape] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -25,6 +32,7 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const [codeCopied, setCodeCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const opacitySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const textColorSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeThemeKey = settings.backgroundTheme ?? "default";
   const activePreset = BACKGROUND_THEMES.find((t) => t.id === activeThemeKey);
@@ -154,6 +162,18 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  function handleTextColorChange(key: string, color: string | null) {
+    const next = { ...(settings.textColors ?? {}) };
+    if (color) next[key] = color;
+    else delete next[key];
+    onSettingsChange({ ...settings, textColors: next });
+    // Dragging the picker fires continuously - save once it settles.
+    if (textColorSaveTimer.current) clearTimeout(textColorSaveTimer.current);
+    textColorSaveTimer.current = setTimeout(() => {
+      api.setTextColor(key, color).catch((e) => setError(String(e)));
+    }, 250);
   }
 
   function handleOpacityChange(kind: "sidebar" | "modsPanel", sliderValue: number) {
@@ -291,7 +311,37 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
             value={modsPanelTransparency}
             onChange={(e) => handleOpacityChange("modsPanel", Number(e.target.value))}
           />
+
           <div className="hint">Saved per theme - higher lets it show through the mods/resource pack list more.</div>
+        </div>
+
+        <div className="form-field">
+          <label>Text colors</label>
+          <div className="text-color-grid">
+            {TEXT_COLOR_OPTIONS.map((opt) => {
+              const custom = settings.textColors?.[opt.key];
+              return (
+                <div className="text-color-row" key={opt.key}>
+                  <input
+                    type="color"
+                    value={custom ?? opt.fallback}
+                    onChange={(e) => handleTextColorChange(opt.key, e.target.value)}
+                    title={`Pick the ${opt.label.toLowerCase()} color`}
+                  />
+                  <span className="text-color-label">
+                    {opt.label}
+                    <span className="text-color-desc"> - {opt.desc}</span>
+                  </span>
+                  {custom && (
+                    <button className="ghost-btn small" onClick={() => handleTextColorChange(opt.key, null)}>
+                      Reset
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="hint">Used across the whole launcher, whatever background is picked.</div>
         </div>
 
         <div className="form-field">
