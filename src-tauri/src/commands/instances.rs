@@ -1211,6 +1211,21 @@ pub async fn get_server_info(state: State<'_, AppState>, id: String) -> Result<S
 
 /// The machine's internet-facing address, as an outside service sees it.
 pub(crate) async fn lookup_public_ip(http: &reqwest::Client) -> Result<String, String> {
+    // Cached for a while - remote admins' headers poll for this.
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, String)>> = std::sync::Mutex::new(None);
+    if let Some((at, ip)) = CACHE.lock().ok().and_then(|c| c.clone()) {
+        if at.elapsed() < std::time::Duration::from_secs(600) {
+            return Ok(ip);
+        }
+    }
+    let ip = fetch_public_ip(http).await?;
+    if let Ok(mut c) = CACHE.lock() {
+        *c = Some((std::time::Instant::now(), ip.clone()));
+    }
+    Ok(ip)
+}
+
+async fn fetch_public_ip(http: &reqwest::Client) -> Result<String, String> {
     let text = http
         .get("https://api.ipify.org")
         .timeout(std::time::Duration::from_secs(8))
@@ -1526,4 +1541,27 @@ pub fn show_screenshot_in_folder(state: State<AppState>, id: String, file_name: 
         let dir = path.parent().ok_or_else(|| "No folder".to_string())?;
         std::process::Command::new("xdg-open").arg(dir).spawn().map(|_| ()).map_err(|e| e.to_string())
     }
+}
+
+/// The mods list's user-made groups for an instance (see ModsPanel) - kept
+/// as the frontend's own JSON in the mods folder, so it travels with the
+/// instance (backups, duplicates). An empty object when there are none.
+#[tauri::command(async)]
+pub fn get_mod_groups(state: State<AppState>, id: String) -> Result<serde_json::Value, String> {
+    let dir = resolve_mods_dir(&state, &id)?;
+    Ok(std::fs::read_to_string(dir.join(".mint_mod_groups.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({})))
+}
+
+#[tauri::command(async)]
+pub fn save_mod_groups(state: State<AppState>, id: String, groups: serde_json::Value) -> Result<(), String> {
+    let dir = resolve_mods_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&groups).map_err(|e| e.to_string())?;
+    if text.len() > 1024 * 1024 {
+        return Err("Too much group data".to_string());
+    }
+    std::fs::write(dir.join(".mint_mod_groups.json"), text).map_err(|e| e.to_string())
 }

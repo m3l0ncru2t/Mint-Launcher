@@ -392,7 +392,11 @@ pub async fn list_online_players(
     };
 
     let mut sample = Vec::with_capacity(names.len());
-    for name in names {
+    for shown in names {
+        // A team prefix (clan/rank tag) is part of what `list` prints, but
+        // Mojang lookups and kick/ban/op commands need the plain name.
+        let name = crate::minecraft::server_ping::bare_username(&shown);
+        let display_name = (shown != name).then_some(shown);
         let cached = state.uuid_cache.lock().await.get(&name).cloned();
         let id = match cached {
             Some(id) => id,
@@ -410,7 +414,7 @@ pub async fn list_online_players(
                 }
             }
         };
-        sample.push(crate::minecraft::server_ping::PlayerSample { id, name });
+        sample.push(crate::minecraft::server_ping::PlayerSample { id, name, display_name });
     }
 
     Ok(crate::minecraft::server_ping::ServerStatus {

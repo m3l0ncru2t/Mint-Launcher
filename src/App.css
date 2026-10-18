@@ -2516,3 +2516,134 @@ button {
   border-radius: 6px;
   padding: 4px 8px;
 }
+
+/* ---------- Mod groups ---------- */
+
+.mod-group {
+  margin-bottom: 6px;
+}
+
+.mod-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.mod-group-header:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mod-group-caret {
+  width: 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.mod-group-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mod-group-rename {
+  font-size: 13px;
+  padding: 2px 6px;
+  min-width: 0;
+}
+
+.mod-group-count {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.mod-group-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mod-group-empty {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.mod-group-new {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+
+.mod-group-new input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mod-group-select {
+  max-width: 120px;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* ---------- Text backgrounds ----------
+   Small see-through boxes behind text that sits straight on the background
+   image, so it stays readable over busy backgrounds. Strength is the
+   "Text backgrounds" slider in Settings (--text-backdrop-alpha, 0 = off). */
+
+:root {
+  --text-backdrop-alpha: 0.45;
+  --text-backdrop: rgb(12 15 14 / var(--text-backdrop-alpha));
+}
+
+.instance-header-text {
+  background: var(--text-backdrop);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+.files-tab-bar {
+  background: var(--text-backdrop);
+}
+
+.panel-header h4,
+.panel-header > .hint-inline {
+  background: var(--text-backdrop);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.mods-list .placeholder,
+.screenshot-grid-scroll > .placeholder {
+  background: var(--text-backdrop);
+  border-radius: 6px;
+  width: fit-content;
+  margin: 8px;
+}
+
+.mods-subheader {
+  background: var(--text-backdrop);
+  border-radius: 5px;
+  width: fit-content;
+  padding: 3px 8px;
+  margin: 8px 0 4px 4px;
+}

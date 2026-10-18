@@ -6,6 +6,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ModInfoDialog } from "./ModInfoDialog";
 import type { ModFile, ModUpdateInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
+import { modKey, normalizeGroupData, type ModGroup, type ModGroupData } from "../lib/modGroups";
 
 interface Props {
   instanceId: string;
@@ -29,6 +30,78 @@ export function ModsPanel({ instanceId }: Props) {
   const [showBrowse, setShowBrowse] = useState(false);
   const [infoFile, setInfoFile] = useState<string | null>(null);
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
+
+  // --- groups ---
+  const [groupData, setGroupData] = useState<ModGroupData>({ groups: [], assignments: {} });
+  const [newGroupName, setNewGroupName] = useState<string | null>(null);
+  const [renamingGroup, setRenamingGroup] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<ModGroup | null>(null);
+
+  useEffect(() => {
+    setGroupData({ groups: [], assignments: {} });
+    api
+      .getModGroups(instanceId)
+      .then((raw) => setGroupData(normalizeGroupData(raw)))
+      .catch(() => {});
+  }, [instanceId]);
+
+  function updateGroups(next: ModGroupData) {
+    setGroupData(next);
+    api.saveModGroups(instanceId, next).catch((e) => setError(String(e)));
+  }
+
+  function createGroup() {
+    const name = (newGroupName ?? "").trim();
+    setNewGroupName(null);
+    if (!name) return;
+    const id = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    updateGroups({ ...groupData, groups: [...groupData.groups, { id, name, collapsed: false }] });
+  }
+
+  function renameGroup() {
+    if (!renamingGroup) return;
+    const name = renamingGroup.name.trim();
+    setRenamingGroup(null);
+    if (!name) return;
+    updateGroups({
+      ...groupData,
+      groups: groupData.groups.map((g) => (g.id === renamingGroup.id ? { ...g, name } : g)),
+    });
+  }
+
+  function deleteGroup(id: string) {
+    const assignments = Object.fromEntries(Object.entries(groupData.assignments).filter(([, g]) => g !== id));
+    updateGroups({ groups: groupData.groups.filter((g) => g.id !== id), assignments });
+  }
+
+  function toggleCollapsed(id: string) {
+    updateGroups({
+      ...groupData,
+      groups: groupData.groups.map((g) => (g.id === id ? { ...g, collapsed: !g.collapsed } : g)),
+    });
+  }
+
+  function moveGroup(id: string, delta: number) {
+    const groups = [...groupData.groups];
+    const i = groups.findIndex((g) => g.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= groups.length) return;
+    [groups[i], groups[j]] = [groups[j], groups[i]];
+    updateGroups({ ...groupData, groups });
+  }
+
+  function assignMod(fileName: string, groupId: string) {
+    const assignments = { ...groupData.assignments };
+    if (groupId) assignments[modKey(fileName)] = groupId;
+    else delete assignments[modKey(fileName)];
+    updateGroups({ ...groupData, assignments });
+  }
+
+  async function setGroupEnabled(groupMods: ModFile[], enabled: boolean) {
+    for (const m of groupMods) {
+      if (m.enabled !== enabled) await handleToggle(m.fileName, enabled);
+    }
+  }
 
   function load(showLoading: boolean, thenCheckUpdates: boolean) {
     if (loadingRef.current) {
@@ -190,8 +263,14 @@ export function ModsPanel({ instanceId }: Props) {
   // post-update scan), where "no update" alone doesn't say whether a mod is
   // fine or just abandoned for the new target.
   const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
-  const primaryMods = mods.filter((m) => !m.isDependency);
-  const dependencyMods = mods.filter((m) => m.isDependency);
+  const knownGroups = new Set(groupData.groups.map((g) => g.id));
+  const groupOf = (m: ModFile) => {
+    const g = groupData.assignments[modKey(m.fileName)];
+    return g && knownGroups.has(g) ? g : "";
+  };
+  const ungrouped = mods.filter((m) => !groupOf(m));
+  const primaryMods = ungrouped.filter((m) => !m.isDependency);
+  const dependencyMods = ungrouped.filter((m) => m.isDependency);
 
   function renderRow(m: ModFile) {
     const update = updates[m.fileName];
@@ -225,6 +304,22 @@ export function ModsPanel({ instanceId }: Props) {
           <span className="mod-incompatible-badge" title="No build of this mod is published for the current game version/loader yet">
             Incompatible
           </span>
+        )}
+        {groupData.groups.length > 0 && (
+          <select
+            className="mod-group-select"
+            value={groupOf(m)}
+            title="Move to group"
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => assignMod(m.fileName, e.target.value)}
+          >
+            <option value="">No group</option>
+            {groupData.groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
         )}
         <span className="mod-size">{formatSize(m.size)}</span>
         {update?.updateAvailable && (
@@ -270,6 +365,9 @@ export function ModsPanel({ instanceId }: Props) {
           <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
             Browse Mods
           </button>
+          <button className="ghost-btn small" onClick={() => setNewGroupName("")} title="Make a group to organise mods into">
+            New group
+          </button>
           <button className="ghost-btn small" onClick={() => load(true, true)}>
             Refresh
           </button>
@@ -285,6 +383,97 @@ export function ModsPanel({ instanceId }: Props) {
           <div className="placeholder">
             No mods installed. Drop .jar files into the mods folder - the list updates on its own.
           </div>
+        )}
+        {newGroupName !== null && (
+          <div className="mod-group-new">
+            <input
+              autoFocus
+              placeholder="Group name (e.g. Performance, QoL, Visuals)"
+              value={newGroupName}
+              maxLength={40}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") createGroup();
+                if (e.key === "Escape") setNewGroupName(null);
+              }}
+            />
+            <button className="primary-btn small" onClick={createGroup}>
+              Create
+            </button>
+            <button className="ghost-btn small" onClick={() => setNewGroupName(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+        {!loading &&
+          !error &&
+          groupData.groups.map((g, gi) => {
+            const groupMods = mods.filter((m) => groupOf(m) === g.id);
+            const enabledCount = groupMods.filter((m) => m.enabled).length;
+            return (
+              <div key={g.id} className="mod-group">
+                <div className="mod-group-header" onClick={() => toggleCollapsed(g.id)}>
+                  <span className="mod-group-caret">{g.collapsed ? "▸" : "▾"}</span>
+                  {renamingGroup?.id === g.id ? (
+                    <input
+                      className="mod-group-rename"
+                      autoFocus
+                      value={renamingGroup.name}
+                      maxLength={40}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenamingGroup({ id: g.id, name: e.target.value })}
+                      onBlur={renameGroup}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") renameGroup();
+                        if (e.key === "Escape") setRenamingGroup(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="mod-group-name">{g.name}</span>
+                  )}
+                  <span className="mod-group-count">
+                    {groupMods.length === 0 ? "empty" : `${enabledCount}/${groupMods.length} on`}
+                  </span>
+                  <div className="mod-group-actions" onClick={(e) => e.stopPropagation()}>
+                    {groupMods.length > 0 && (
+                      <button
+                        className="ghost-btn small"
+                        title={enabledCount === groupMods.length ? "Disable every mod in this group" : "Enable every mod in this group"}
+                        onClick={() => setGroupEnabled(groupMods, enabledCount !== groupMods.length)}
+                      >
+                        {enabledCount === groupMods.length ? "Disable all" : "Enable all"}
+                      </button>
+                    )}
+                    <button className="icon-btn" title="Move up" disabled={gi === 0} onClick={() => moveGroup(g.id, -1)}>
+                      ↑
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Move down"
+                      disabled={gi === groupData.groups.length - 1}
+                      onClick={() => moveGroup(g.id, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button className="icon-btn" title="Rename group" onClick={() => setRenamingGroup({ id: g.id, name: g.name })}>
+                      ✎
+                    </button>
+                    <button className="icon-btn" title="Delete group (its mods stay installed)" onClick={() => setConfirmDeleteGroup(g)}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                {!g.collapsed &&
+                  (groupMods.length === 0 ? (
+                    <div className="placeholder mod-group-empty">Use the group menu on a mod to move it here.</div>
+                  ) : (
+                    groupMods.map(renderRow)
+                  ))}
+              </div>
+            );
+          })}
+        {!loading && !error && groupData.groups.length > 0 && ungrouped.length > 0 && (
+          <div className="mods-subheader">Ungrouped</div>
         )}
         {!loading && !error && primaryMods.map(renderRow)}
         {!loading && !error && dependencyMods.length > 0 && (
@@ -305,6 +494,20 @@ export function ModsPanel({ instanceId }: Props) {
 
       {infoFile && (
         <ModInfoDialog instanceId={instanceId} fileName={infoFile} onClose={() => setInfoFile(null)} />
+      )}
+
+      {confirmDeleteGroup && (
+        <ConfirmDialog
+          title="Delete group?"
+          message={`Delete the "${confirmDeleteGroup.name}" group? Its mods stay installed and go back to the main list.`}
+          confirmLabel="Delete group"
+          danger
+          onConfirm={() => {
+            deleteGroup(confirmDeleteGroup.id);
+            setConfirmDeleteGroup(null);
+          }}
+          onCancel={() => setConfirmDeleteGroup(null)}
+        />
       )}
 
       {confirmDeleteFile && (

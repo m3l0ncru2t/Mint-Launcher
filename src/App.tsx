@@ -42,6 +42,7 @@ export default function App() {
     backgroundTheme: null,
     themeOpacity: {},
     textColors: {},
+    textBackdropOpacity: 0.45,
     customBackgroundNames: {},
     experimentalServerInstances: false,
     experimentalConfigsLogsTabs: false,
@@ -186,6 +187,10 @@ export default function App() {
     document.documentElement.style.setProperty("--mods-panel-alpha", String(entry?.modsPanel ?? fallback.modsPanel));
   }, [settings.backgroundTheme, settings.themeOpacity]);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--text-backdrop-alpha", String(settings.textBackdropOpacity ?? 0.45));
+  }, [settings.textBackdropOpacity]);
+
   // Custom text colors override the stylesheet's --text-* defaults.
   useEffect(() => {
     const vars: Record<string, string> = { primary: "--text-0", secondary: "--text-1", muted: "--text-2" };
@@ -224,6 +229,7 @@ export default function App() {
     setSelectedRemoteId(id);
   }
 
+  // Throws on failure so the detail view can show why.
   async function removeRemoteServer(id: string) {
     await api.removeRemoteServer(id);
     setRemoteServers((prev) => prev.filter((l) => l.id !== id));

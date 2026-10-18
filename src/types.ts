@@ -16,7 +16,10 @@ export interface TextRun {
 
 export interface PlayerSample {
   id: string;
+  /** Plain account name - used for heads and kick/ban/op. */
   name: string;
+  /** With the clan/rank tag, when the server shows one ("[MINT] Steve"). */
+  displayName?: string;
 }
 
 export interface ServerStatus {
@@ -129,6 +132,8 @@ export interface Settings {
   themeOpacity: Record<string, ThemeOpacity>;
   /** "primary" | "secondary" | "muted" -> "#rrggbb"; missing = default. */
   textColors: Record<string, string>;
+  /** 0-1: the dark boxes behind text over the background image. */
+  textBackdropOpacity: number;
   customBackgroundNames: Record<string, string>;
   experimentalServerInstances: boolean;
   experimentalConfigsLogsTabs: boolean;

@@ -66,6 +66,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/whitelist/{name}", delete(remove_whitelist))
         .route("/whitelist-state", get(whitelist_state).post(set_whitelist_state))
         .route("/server-info", get(server_info))
+        .route("/header-info", get(header_info))
         .route("/bans", get(list_bans).post(add_ban))
         .route("/bans/{name}", delete(remove_ban))
         .route("/start", post(start))
@@ -1267,4 +1268,41 @@ async fn set_whitelist_state(
             .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeaderInfo {
+    port: u16,
+    /// The owner's domain/DDNS name, if set - every op sees this.
+    domain: Option<String>,
+    /// Only for full-access admins (see `server_info`).
+    public_ip: Option<String>,
+    local_ip: Option<String>,
+    /// Unix seconds the server process started, while it's running.
+    started_at: Option<u64>,
+}
+
+/// The cheap bits the remote header shows (address + uptime) - polled, so
+/// unlike `/server-info` it doesn't walk the world folder.
+async fn header_info(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<HeaderInfo>, ApiError> {
+    let session = require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let full = has_full_access(&app, &session).await;
+    let state = app.state::<AppState>();
+    let addresses = commands::instances::get_server_addresses(app.state::<AppState>(), id.clone())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let public_ip = if full && addresses.domain.is_none() {
+        commands::instances::lookup_public_ip(&state.http).await.ok()
+    } else {
+        None
+    };
+    Ok(Json(HeaderInfo {
+        port: addresses.port,
+        domain: addresses.domain,
+        public_ip,
+        local_ip: if full { addresses.local_ip } else { None },
+        started_at: commands::launch::instance_start_time(&state, &id).await,
+    }))
 }

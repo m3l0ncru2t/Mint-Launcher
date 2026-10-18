@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { parseChatLines, type ChatEntry } from "../chatParser";
+import { bareUsername, parseChatLines, type ChatEntry } from "../chatParser";
 import { useAutoFollow } from "../hooks/useAutoFollow";
 import { enqueueMojangLookup } from "../lib/mojangLookupQueue";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -133,7 +133,8 @@ function usePlayerUuid(name: string | undefined): string | null {
 /** A player's head next to a chat line. Falls back to `PlayerAvatar`'s own
  * plain-initial behavior when the name doesn't resolve to a real account
  * (offline-mode name, typo, lookup failure) rather than showing nothing. */
-function ChatAvatar({ name }: { name: string | undefined }) {
+function ChatAvatar({ name: shown }: { name: string | undefined }) {
+  const name = shown ? bareUsername(shown) : undefined;
   const uuid = usePlayerUuid(name);
   if (!name) return null;
   return <PlayerAvatar uuid={uuid ?? `offline-${name}`} username={name} className="player-row-avatar chat-line-avatar" size={20} />;
@@ -154,7 +155,8 @@ type ModerateFn = (command: string) => Promise<unknown>;
  * current IP itself), so this needs nothing beyond the name every other
  * action here already has. Hidden until the row is hovered, and entirely
  * absent when there's no console to send a command to. */
-function ModerationActions({ name, onModerate }: { name: string; onModerate: ModerateFn }) {
+function ModerationActions({ name: shown, onModerate }: { name: string; onModerate: ModerateFn }) {
+  const name = bareUsername(shown);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 

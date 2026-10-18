@@ -77,6 +77,8 @@ export const api = {
   setServerDomain: (instanceId: string, domain: string) => invoke<void>("set_server_domain", { instanceId, domain }),
   getServerAddresses: (id: string) =>
     invoke<{ localIp: string | null; port: number; domain: string | null }>("get_server_addresses", { id }),
+  getModGroups: (id: string) => invoke<unknown>("get_mod_groups", { id }),
+  saveModGroups: (id: string, groups: unknown) => invoke<void>("save_mod_groups", { id, groups }),
   listScreenshots: (id: string) => invoke<ScreenshotFile[]>("list_screenshots", { id }),
   getScreenshotThumbnail: (id: string, fileName: string) =>
     invoke<string>("get_screenshot_thumbnail", { id, fileName }),
@@ -268,6 +270,7 @@ export const api = {
 
   setBackgroundTheme: (theme: string | null) => invoke<void>("set_background_theme", { theme }),
 
+  setTextBackdropOpacity: (opacity: number) => invoke<void>("set_text_backdrop_opacity", { opacity }),
   setTextColor: (key: string, color: string | null) => invoke<void>("set_text_color", { key, color }),
   setThemeOpacity: (themeId: string, sidebar: number, modsPanel: number) =>
     invoke<void>("set_theme_opacity", { themeId, sidebar, modsPanel }),

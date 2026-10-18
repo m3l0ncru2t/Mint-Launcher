@@ -33,7 +33,32 @@ pub struct ServerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct PlayerSample {
     pub id: String,
+    /// The plain account name - what lookups and kick/ban/op commands need.
     pub name: String,
+    /// How the server shows the player when that differs from `name` -
+    /// e.g. with a clan/rank tag from a scoreboard team: "[MINT] Steve".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// The real account name inside a decorated one: "[MINT] Steve" -> "Steve",
+/// "Steve [Admin]" -> "Steve". Picks the last whitespace-separated piece
+/// that's a valid Minecraft name and isn't itself a bracketed tag; falls
+/// back to the input trimmed.
+pub fn bare_username(display: &str) -> String {
+    let valid = |s: &str| (1..=16).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let is_tag = |s: &str| {
+        let first = s.chars().next().unwrap_or(' ');
+        matches!(first, '[' | '(' | '{' | '<')
+    };
+    display
+        .split_whitespace()
+        .rev()
+        .filter(|tok| !is_tag(tok))
+        .map(|tok| tok.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+        .find(|tok| valid(tok))
+        .map(str::to_string)
+        .unwrap_or_else(|| display.trim().to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,7 +133,7 @@ async fn ping_inner(host: &str, port: u16) -> anyhow::Result<ServerStatus> {
                 .filter_map(|entry| {
                     let id = entry.get("id")?.as_str()?.to_string();
                     let name = entry.get("name")?.as_str()?.to_string();
-                    Some(PlayerSample { id, name })
+                    Some(PlayerSample { id, name, display_name: None })
                 })
                 .collect()
         })

@@ -164,6 +164,15 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
     }
   }
 
+  const textBackdropSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleTextBackdropChange(opacity: number) {
+    onSettingsChange({ ...settings, textBackdropOpacity: opacity });
+    if (textBackdropSaveTimer.current) clearTimeout(textBackdropSaveTimer.current);
+    textBackdropSaveTimer.current = setTimeout(() => {
+      api.setTextBackdropOpacity(opacity).catch((e) => setError(String(e)));
+    }, 250);
+  }
+
   function handleTextColorChange(key: string, color: string | null) {
     const next = { ...(settings.textColors ?? {}) };
     if (color) next[key] = color;
@@ -313,6 +322,22 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
           />
 
           <div className="hint">Saved per theme - higher lets it show through the mods/resource pack list more.</div>
+        </div>
+
+        <div className="form-field">
+          <label>Text backgrounds</label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round((settings.textBackdropOpacity ?? 0.45) * 100)}
+            onChange={(e) => handleTextBackdropChange(Number(e.target.value) / 100)}
+          />
+          <div className="hint">
+            Small dark boxes behind text that sits on the background (instance name, tabs, list titles) - higher is
+            easier to read, 0 turns them off.
+          </div>
         </div>
 
         <div className="form-field">

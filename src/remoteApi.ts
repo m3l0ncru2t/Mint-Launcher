@@ -216,6 +216,19 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
       }),
     removeOpEntry: (name: string) => request(`/ops/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
+    /** Hosts older than this feature don't have it (404) - callers treat
+     * that as "nothing to show". */
+    getHeaderInfo: () =>
+      request("/header-info").then(
+        (r) =>
+          r.json() as Promise<{
+            port: number;
+            domain: string | null;
+            publicIp: string | null;
+            localIp: string | null;
+            startedAt: number | null;
+          }>,
+      ),
     getServerInfo: () => request("/server-info").then((r) => r.json() as Promise<ServerInfo>),
     getWhitelistEnabled: () =>
       request("/whitelist-state").then((r) => r.json() as Promise<{ enabled: boolean }>).then((r) => r.enabled),

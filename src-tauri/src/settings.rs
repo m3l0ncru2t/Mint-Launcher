@@ -47,6 +47,10 @@ pub struct Settings {
     /// applied over every theme. A missing key means that color's default.
     #[serde(default)]
     pub text_colors: HashMap<String, String>,
+    /// Opacity (0-1) of the small dark boxes behind text that sits directly
+    /// on the background image - 0 hides them.
+    #[serde(default = "default_text_backdrop")]
+    pub text_backdrop_opacity: f32,
     /// Display names for custom backgrounds, keyed by their id - a custom
     /// background with no entry here shows as plain "Custom".
     #[serde(default)]
@@ -106,6 +110,10 @@ pub struct Settings {
     pub spacious_instance_view: bool,
 }
 
+fn default_text_backdrop() -> f32 {
+    0.45
+}
+
 fn default_remote_admin_port() -> u16 {
     25580
 }
@@ -119,6 +127,7 @@ impl Default for Settings {
             background_theme: None,
             theme_opacity: HashMap::new(),
             text_colors: HashMap::new(),
+            text_backdrop_opacity: default_text_backdrop(),
             custom_background_names: HashMap::new(),
             experimental_server_instances: false,
             experimental_configs_logs_tabs: false,

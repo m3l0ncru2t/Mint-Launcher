@@ -12,6 +12,7 @@ interface Props {
 interface OnlinePlayer {
   id: string;
   name: string;
+  displayName?: string;
 }
 
 /** A tiny "type a username, hit Add" row - reused for the whitelist/ops/bans
@@ -256,7 +257,7 @@ export function PlayersPanel({ instanceId, isRunning }: Props) {
           <div key={p.id} className="mod-row player-row">
             <PlayerAvatar uuid={p.id} username={p.name} className="player-row-avatar" size={24} />
             <div className="mod-name-block">
-              <span className="mod-name">{p.name}</span>
+              <span className="mod-name">{p.displayName ?? p.name}</span>
               {isOp(p.name) && <span className="mod-filename">Operator</span>}
             </div>
             <div className="player-row-actions">

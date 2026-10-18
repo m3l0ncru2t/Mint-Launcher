@@ -22,10 +22,11 @@ import type {
   WhitelistEntry,
 } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
+import { useUptime } from "../lib/uptime";
 
 interface Props {
   link: RemoteServerLink;
-  onRemove: (id: string) => void;
+  onRemove: (id: string) => Promise<void>;
   onLinkUpdated: (link: RemoteServerLink) => void;
   spaciousView: boolean;
 }
@@ -46,6 +47,42 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
   const [tab, setTab] = useState<Tab>("console");
   const [iconUrl, setIconUrl] = useState<string | null>(null);
   const [running, setRunning] = useState<boolean | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  // Address + uptime for the header (from the host's /header-info).
+  const [headerInfo, setHeaderInfo] = useState<{
+    port: number;
+    domain: string | null;
+    publicIp: string | null;
+    localIp: string | null;
+    startedAt: number | null;
+  } | null>(null);
+  useEffect(() => {
+    setHeaderInfo(null);
+    let cancelled = false;
+    const load = () =>
+      remoteApi(link, onTokenRefreshed)
+        .getHeaderInfo()
+        .then((h) => !cancelled && setHeaderInfo(h))
+        .catch(() => {});
+    load();
+    const stop = setVisibleInterval(load, 30000);
+    return () => {
+      cancelled = true;
+      stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.id]);
+  const uptime = useUptime(running ? headerInfo?.startedAt : null);
+  const withPort = (host: string, port: number) => (port === 25565 ? host : `${host}:${port}`);
+  const publicAddress = headerInfo
+    ? headerInfo.domain
+      ? withPort(headerInfo.domain, headerInfo.port)
+      : headerInfo.publicIp
+        ? `${headerInfo.publicIp}:${headerInfo.port}`
+        : null
+    : null;
   // Owner-controlled (Settings > Remote Admin on the host) - gates the raw
   // console input and the Files tab, which the host refuses otherwise.
   const [fullAccess, setFullAccess] = useState(false);
@@ -200,12 +237,25 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         <div className="instance-header-text">
           <h2 onMouseEnter={showFullTextIfTruncated}>{link.name}</h2>
           <div className="meta" onMouseEnter={showFullTextIfTruncated}>
-            {link.versionId} · {link.loader}{link.nodeId ? "" : ` · ${link.host}:${link.port}`}
+            {link.versionId} · {link.loader}
+            {uptime ? ` · up ${uptime}` : ""}
           </div>
+          {(publicAddress || headerInfo?.localIp) && (
+            <div className="meta server-address-meta" onMouseEnter={showFullTextIfTruncated}>
+              {headerInfo?.localIp && <span>LAN {headerInfo.localIp}:{headerInfo.port}</span>}
+              {headerInfo?.localIp && publicAddress && " · "}
+              {publicAddress && (
+                <span>
+                  {headerInfo?.domain ? "" : "Public "}
+                  {publicAddress}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="instance-header-actions">
-          <button className="danger-btn" onClick={() => onRemove(link.id)}>
-            Disconnect
+          <button className="danger-btn" onClick={() => setConfirmRemove(true)} title="Remove this remote server from your launcher">
+            Remove
           </button>
           {running ? (
             <>
@@ -232,6 +282,7 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         </div>
       </div>
 
+      {removeError && <div className="error-text" style={{ padding: "6px 28px 0" }}>{removeError}</div>}
       <div className={spaciousView ? "instance-body-spacious" : "instance-body"}>
         {running != null && (
           <div className="progress-card">
@@ -420,6 +471,21 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
           )}
         </div>
       </div>
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove remote server?"
+          message={`Remove "${link.name}" from your launcher? Nothing changes on the server itself - you can link it again later with its code or address.`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={() => {
+            setConfirmRemove(false);
+            setRemoveError(null);
+            onRemove(link.id).catch((e) => setRemoveError(`Couldn't remove it: ${String(e)}`));
+          }}
+          onCancel={() => setConfirmRemove(false)}
+        />
+      )}
 
       {confirmAction && (
         <ConfirmDialog
@@ -1165,7 +1231,7 @@ function RemotePlayersTab({
           <div key={p.id} className="mod-row player-row">
             <PlayerAvatar uuid={p.id} username={p.name} className="player-row-avatar" size={24} />
             <div className="mod-name-block">
-              <span className="mod-name">{p.name}</span>
+              <span className="mod-name">{p.displayName ?? p.name}</span>
               {isOp(p.name) && <span className="mod-filename">Operator</span>}
             </div>
             <div className="player-row-actions">

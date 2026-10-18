@@ -119,3 +119,16 @@ export function parseChatLines(text: string): ChatEntry[] {
     return !isDuplicate;
   });
 }
+
+/** The real account name inside a decorated chat name: "[MINT] Steve" ->
+ * "Steve", "Steve [Admin]" -> "Steve" - what a head lookup or a kick/ban
+ * command needs. Mirrors server_ping::bare_username on the backend. */
+export function bareUsername(display: string): string {
+  const tokens = display.trim().split(/\s+/).reverse();
+  for (const tok of tokens) {
+    if (/^[[({<]/.test(tok)) continue;
+    const t = tok.replace(/^[^A-Za-z0-9_]+|[^A-Za-z0-9_]+$/g, "");
+    if (/^[A-Za-z0-9_]{1,16}$/.test(t)) return t;
+  }
+  return display.trim();
+}
