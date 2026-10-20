@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parseChatLines } from "../chatParser";
 import { useAutoFollow } from "../hooks/useAutoFollow";
 import { isMintPollLine } from "../lib/consoleFilter";
@@ -6,6 +6,8 @@ import { remoteApi, streamConsoleTailThenLive } from "../remoteApi";
 import { AddByUsername } from "./PlayersPanel";
 import { ChatLine } from "./ChatPanel";
 import { ServerInfoPanel } from "./ServerInfoPanel";
+import { GroupedModList } from "./GroupedModList";
+import { filterMods } from "../lib/modSearch";
 import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -528,6 +530,8 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [showBrowse, setShowBrowse] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [search, setSearch] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function load(showLoading = true, thenCheckUpdates = true) {
@@ -622,6 +626,49 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
     }
   }
 
+  function renderRow(m: ModFile, groupSelect: ReactNode) {
+    const update = updates[m.fileName];
+    const isUpdating = updating.has(m.fileName);
+    return (
+      <div key={m.fileName} className={`mod-row${m.enabled ? "" : " disabled"}`} style={{ cursor: "default" }}>
+        <label className="mod-toggle-wrap">
+          <input
+            type="checkbox"
+            className="mod-toggle"
+            checked={m.enabled}
+            title={m.enabled ? "Disable mod" : "Enable mod"}
+            onChange={(e) => handleToggle(m.fileName, e.target.checked)}
+          />
+        </label>
+        {update?.iconUrl ? (
+          <img src={update.iconUrl} className="mod-row-icon" alt="" />
+        ) : (
+          <div className="mod-row-icon placeholder-icon">
+            {(update?.title ?? m.fileName).slice(0, 1).toUpperCase()}
+          </div>
+        )}
+        <div className="mod-name-block">
+          <span className="mod-name">{update?.title ?? m.fileName}</span>
+          {update?.title && <span className="mod-filename">{m.fileName}</span>}
+        </div>
+        {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
+        {update && !update.updateAvailable && update.projectId && !update.compatible && (
+          <span className="mod-incompatible-badge">Incompatible</span>
+        )}
+        {groupSelect}
+        <span className="mod-size">{formatSize(m.size)}</span>
+        {update?.updateAvailable && (
+          <button className="ghost-btn small" disabled={isUpdating} onClick={() => handleUpdate(update)}>
+            {isUpdating ? <span className="spinner-small" /> : "Update"}
+          </button>
+        )}
+        <button className="icon-btn" title="Delete" onClick={() => handleDelete(m.fileName)}>
+          ✕
+        </button>
+      </div>
+    );
+  }
+
   const updateCount = Object.values(updates).filter((u) => u.updateAvailable).length;
   const incompatibleCount = Object.values(updates).filter((u) => u.projectId && !u.compatible).length;
 
@@ -640,9 +687,20 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
             {incompatibleCount} incompatible with the current version
           </span>
         )}
+        <input
+          className="mod-search"
+          type="search"
+          placeholder="Search mods…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+        />
         <div className="panel-actions">
           <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
             Browse Mods
+          </button>
+          <button className="ghost-btn small" onClick={() => setCreatingGroup(true)} title="Make a group to organise mods into">
+            New group
           </button>
           <button className="ghost-btn small" onClick={() => load()}>
             Refresh
@@ -667,49 +725,29 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
         {loading && <div className="placeholder">Loading…</div>}
         {!loading && error && <div className="error-text">{error}</div>}
         {!loading && !error && mods.length === 0 && <div className="placeholder">No mods installed.</div>}
-        {!loading &&
-          !error &&
-          mods.map((m) => {
-            const update = updates[m.fileName];
-            const isUpdating = updating.has(m.fileName);
-            return (
-              <div key={m.fileName} className={`mod-row${m.enabled ? "" : " disabled"}`} style={{ cursor: "default" }}>
-                <label className="mod-toggle-wrap">
-                  <input
-                    type="checkbox"
-                    className="mod-toggle"
-                    checked={m.enabled}
-                    title={m.enabled ? "Disable mod" : "Enable mod"}
-                    onChange={(e) => handleToggle(m.fileName, e.target.checked)}
-                  />
-                </label>
-                {update?.iconUrl ? (
-                  <img src={update.iconUrl} className="mod-row-icon" alt="" />
-                ) : (
-                  <div className="mod-row-icon placeholder-icon">
-                    {(update?.title ?? m.fileName).slice(0, 1).toUpperCase()}
-                  </div>
-                )}
-                <div className="mod-name-block">
-                  <span className="mod-name">{update?.title ?? m.fileName}</span>
-                  {update?.title && <span className="mod-filename">{m.fileName}</span>}
-                </div>
-                {update?.updateAvailable && <span className="mod-update-badge">→ {update.latestVersion}</span>}
-                {update && !update.updateAvailable && update.projectId && !update.compatible && (
-                  <span className="mod-incompatible-badge">Incompatible</span>
-                )}
-                <span className="mod-size">{formatSize(m.size)}</span>
-                {update?.updateAvailable && (
-                  <button className="ghost-btn small" disabled={isUpdating} onClick={() => handleUpdate(update)}>
-                    {isUpdating ? <span className="spinner-small" /> : "Update"}
-                  </button>
-                )}
-                <button className="icon-btn" title="Delete" onClick={() => handleDelete(m.fileName)}>
-                  ✕
-                </button>
-              </div>
-            );
-          })}
+        {!loading && !error && search.trim() !== "" && filterMods(mods, updates, search).length === 0 && (
+          <div className="placeholder">No mods match "{search.trim()}".</div>
+        )}
+        {!loading && !error && (
+          <GroupedModList
+            storeKey={link.id}
+            loadGroups={() => api.getModGroups()}
+            saveGroups={(data) =>
+              api.saveModGroups(data).catch((e) => {
+                throw String(e).includes("404")
+                  ? "The server's Mint needs updating before mod groups can be saved"
+                  : e;
+              })
+            }
+            mods={filterMods(mods, updates, search)}
+            filtering={search.trim() !== ""}
+            renderRow={renderRow}
+            onToggle={handleToggle}
+            creating={creatingGroup}
+            onCreatingDone={() => setCreatingGroup(false)}
+            onError={setError}
+          />
+        )}
       </div>
 
       {showBrowse && (

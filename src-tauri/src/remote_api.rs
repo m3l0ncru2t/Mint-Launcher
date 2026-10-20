@@ -37,6 +37,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/mods/{file_name}/info", get(mod_info))
         .route("/mods/{file_name}/toggle", post(toggle_mod))
         .route("/mods/updates", get(mod_updates))
+        .route("/mod-groups", get(get_mod_groups).put(save_mod_groups))
         .route("/mods/updates/apply", post(apply_mod_update))
         .route("/mods/search", get(search_mods))
         .route("/mods/install", post(install_mod))
@@ -157,6 +158,12 @@ fn generate_token() -> String {
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
 
+/// Notes a remote admin's action in the owner's admin log (see admin_log.rs).
+fn audit(app: &AppHandle, session: &RemoteSession, action: &str, detail: &str) {
+    let state = app.state::<AppState>();
+    crate::admin_log::record(&state.data_dir, &session.username, &session.uuid, action, detail);
+}
+
 async fn require_session(app: &AppHandle, headers: &HeaderMap) -> Result<RemoteSession, ApiError> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -271,6 +278,7 @@ async fn login(State(app): State<AppHandle>, Json(body): Json<LoginRequest>) -> 
         },
     );
 
+    crate::admin_log::record(&state.data_dir, &body.username, &uuid, "Signed in", "");
     Ok(Json(LoginResponse { token, uuid, username: body.username }))
 }
 
@@ -330,10 +338,12 @@ async fn delete_mod(
     headers: HeaderMap,
     Path(file_name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = file_name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::delete_mod(state, id, file_name).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Deleted mod", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -354,11 +364,13 @@ async fn toggle_mod(
     Path(file_name): Path<String>,
     Json(body): Json<ToggleRequest>,
 ) -> Result<Json<ToggleResponse>, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = format!("{} {file_name}", if body.enabled { "enabled" } else { "disabled" });
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     let new_file_name =
         commands::instances::toggle_mod(state, id, file_name, body.enabled).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Toggled mod", &audit_detail);
     Ok(Json(ToggleResponse { file_name: new_file_name }))
 }
 
@@ -394,13 +406,16 @@ async fn install_mod(
     headers: HeaderMap,
     Json(body): Json<InstallRequest>,
 ) -> Result<Json<crate::minecraft::modrinth::InstallSummary>, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = format!("Modrinth project {}", body.project_id);
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
-    commands::instances::install_mod(state, id, body.project_id)
+    let result = commands::instances::install_mod(state, id, body.project_id.clone())
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Installed mod", &audit_detail);
+    Ok(result)
 }
 
 async fn mod_info(
@@ -442,12 +457,14 @@ async fn apply_mod_update(
     headers: HeaderMap,
     Json(body): Json<ApplyModUpdateRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.old_file_name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::apply_mod_update(state, id, body.old_file_name, body.download_url)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Updated mod", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -470,13 +487,14 @@ async fn upload_mod(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
     let (inst, _) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     let mods_dir = inst.mods_dir(&state.instances_dir());
     std::fs::create_dir_all(&mods_dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut wrote_one = false;
+    let mut uploaded: Vec<String> = Vec::new();
     while let Some(field) = multipart
         .next_field()
         .await
@@ -495,10 +513,12 @@ async fn upload_mod(
         }
         std::fs::write(&dest, &data).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         wrote_one = true;
+        uploaded.push(file_name);
     }
     if !wrote_one {
         return Err((StatusCode::BAD_REQUEST, "No file in the upload".to_string()));
     }
+    audit(&app, &session, "Uploaded mod", &uploaded.join(", "));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -519,10 +539,12 @@ async fn delete_resourcepack(
     headers: HeaderMap,
     Path(file_name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = file_name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::delete_resourcepack(state, id, file_name).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Deleted resource pack", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -532,11 +554,13 @@ async fn toggle_resourcepack(
     Path(file_name): Path<String>,
     Json(body): Json<ToggleRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = format!("{} {file_name}", if body.enabled { "enabled" } else { "disabled" });
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::toggle_resourcepack(state, id, file_name, body.enabled)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Toggled resource pack", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -559,13 +583,16 @@ async fn install_resourcepack(
     headers: HeaderMap,
     Json(body): Json<InstallRequest>,
 ) -> Result<Json<crate::minecraft::modrinth::InstalledModInfo>, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = format!("Modrinth project {}", body.project_id);
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
-    commands::instances::install_resourcepack(state, id, body.project_id)
+    let result = commands::instances::install_resourcepack(state, id, body.project_id.clone())
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Installed resource pack", &audit_detail);
+    Ok(result)
 }
 
 async fn resourcepack_updates(
@@ -586,12 +613,14 @@ async fn apply_resourcepack_update(
     headers: HeaderMap,
     Json(body): Json<ApplyModUpdateRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.old_file_name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::apply_resourcepack_update(state, id, body.old_file_name, body.download_url)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Updated resource pack", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -600,13 +629,14 @@ async fn upload_resourcepack(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
     let (inst, _) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     let dir = inst.resourcepacks_dir(&state.instances_dir());
     std::fs::create_dir_all(&dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut wrote_one = false;
+    let mut uploaded: Vec<String> = Vec::new();
     while let Some(field) = multipart
         .next_field()
         .await
@@ -625,10 +655,12 @@ async fn upload_resourcepack(
         }
         std::fs::write(&dest, &data).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         wrote_one = true;
+        uploaded.push(file_name);
     }
     if !wrote_one {
         return Err((StatusCode::BAD_REQUEST, "No file in the upload".to_string()));
     }
+    audit(&app, &session, "Uploaded resource pack", &uploaded.join(", "));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -807,6 +839,7 @@ async fn send_command(
     Json(body): Json<CommandRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.command.trim().to_string();
     // Every admin gets the moderation commands the Players/Chat tabs use;
     // anything else typed into a raw console (`stop`, `gamerule`, `execute`,
     // `save-off`, ...) needs the owner's full-access switch.
@@ -819,6 +852,7 @@ async fn send_command(
     commands::launch::send_instance_command(state, id, body.command)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Ran command", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1006,6 +1040,7 @@ async fn write_file(
     Json(body): Json<WriteFileRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.path.clone();
     require_full_access(&app, &session).await?;
     let (inst, _) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
@@ -1022,6 +1057,7 @@ async fn write_file(
         return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Only plain text files can be edited".to_string()));
     }
     std::fs::write(&path, body.content.as_bytes()).map_err(io_err)?;
+    audit(&app, &session, "Edited file", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1050,10 +1086,12 @@ async fn add_op(
     headers: HeaderMap,
     Json(body): Json<UsernameRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.username.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::add_op_entry(state, id, body.username).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Opped", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1062,10 +1100,12 @@ async fn remove_op(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::remove_op_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "De-opped", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1084,12 +1124,14 @@ async fn add_whitelist(
     headers: HeaderMap,
     Json(body): Json<UsernameRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.username.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::add_whitelist_entry(state, id, body.username)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Whitelisted", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1098,10 +1140,12 @@ async fn remove_whitelist(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::remove_whitelist_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Removed from whitelist", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1120,12 +1164,14 @@ async fn add_ban(
     headers: HeaderMap,
     Json(body): Json<UsernameRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = body.username.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::add_ban_entry(state, id, body.username, String::new())
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Banned", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1134,15 +1180,19 @@ async fn remove_ban(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = name.clone();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::instances::unban_player_entry(state, id, name).await.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Unbanned", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn start(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = String::new();
+    audit(&app, &session, "Started server", &audit_detail);
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::launch::launch_instance(app.clone(), state, id, None)
@@ -1152,17 +1202,21 @@ async fn start(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Statu
 }
 
 async fn stop(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = String::new();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::launch::stop_instance(app.clone(), state, id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Stopped server", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = String::new();
+    audit(&app, &session, "Restarted server", &audit_detail);
     let (_, id) = shared_instance(&app).await?;
     // Same countdown-then-relaunch `restart_instance` the local Restart
     // button calls, so a remote admin's restart gives players the same
@@ -1175,22 +1229,26 @@ async fn restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Sta
 }
 
 async fn cancel_restart(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = String::new();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::launch::cancel_restart(state, id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Canceled restart", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn kill(State(app): State<AppHandle>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = String::new();
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     commands::launch::kill_instance(app.clone(), state, id)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    audit(&app, &session, "Killed server", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1254,7 +1312,8 @@ async fn set_whitelist_state(
     headers: HeaderMap,
     Json(body): Json<WhitelistState>,
 ) -> Result<StatusCode, ApiError> {
-    require_session(&app, &headers).await?;
+    let session = require_session(&app, &headers).await?;
+    let audit_detail: String = (if body.enabled { "turned on" } else { "turned off" }).to_string();
     let (inst, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
     let updates = HashMap::from([("white-list".to_string(), body.enabled.to_string())]);
@@ -1267,6 +1326,7 @@ async fn set_whitelist_state(
             .await
             .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     }
+    audit(&app, &session, "Whitelist", &audit_detail);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1305,4 +1365,28 @@ async fn header_info(State(app): State<AppHandle>, headers: HeaderMap) -> Result
         local_ip: if full { addresses.local_ip } else { None },
         started_at: commands::launch::instance_start_time(&state, &id).await,
     }))
+}
+
+/// The shared instance's mod groups (see ModsPanel/GroupedModList) - the
+/// same `.mint_mod_groups.json` the host's own Mods tab uses, so groups made
+/// on either side show up on both. Same access as the rest of mod
+/// management: any op.
+async fn get_mod_groups(State(app): State<AppHandle>, headers: HeaderMap) -> Result<Json<serde_json::Value>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    commands::instances::get_mod_groups(app.state::<AppState>(), id)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn save_mod_groups(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    commands::instances::save_mod_groups(app.state::<AppState>(), id, body)
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }

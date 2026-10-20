@@ -116,3 +116,10 @@ pub fn describe(what: &str, code: i32, game_dir: &Path, since: SystemTime) -> St
         None => format!("{what} stopped unexpectedly ({label}) - the console shows what happened before it closed"),
     }
 }
+
+/// Whether the game wrote a crash report (or Java a native crash log) at or
+/// after `since` - a crash even when the exit code alone looks clean.
+pub fn crashed_since(game_dir: &Path, since: SystemTime) -> bool {
+    newest_since(&game_dir.join("crash-reports"), since, |n| n.ends_with(".txt")).is_some()
+        || newest_since(game_dir, since, |n| n.starts_with("hs_err_pid") && n.ends_with(".log")).is_some()
+}

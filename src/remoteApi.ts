@@ -218,6 +218,14 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
 
     /** Hosts older than this feature don't have it (404) - callers treat
      * that as "nothing to show". */
+    /** Hosts older than mod groups answer 404 - treated as "no groups". */
+    getModGroups: () => request("/mod-groups").then((r) => r.json() as Promise<unknown>),
+    saveModGroups: (data: unknown) =>
+      request("/mod-groups", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
     getHeaderInfo: () =>
       request("/header-info").then(
         (r) =>

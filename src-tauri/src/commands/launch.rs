@@ -52,6 +52,7 @@ pub async fn stop_instance(app: tauri::AppHandle, state: State<'_, AppState>, in
     let inst = instance::get_instance(&state.instances_dir(), &instance_id).ok().flatten();
     if let Some(inst) = &inst {
         if inst.kind == InstanceKind::Server {
+            crate::server_automation::mark_stop_requested(&state, &instance_id).await;
             let game_dir = inst.game_dir(&state.instances_dir());
             if write_console_line(&state, &game_dir, &instance_id, "stop").await.is_ok() {
                 for _ in 0..30 {
@@ -220,6 +221,7 @@ pub async fn restart_instance(app: tauri::AppHandle, state: State<'_, AppState>,
 pub async fn kill_instance(app: tauri::AppHandle, state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
     let pid = state.running_instances.lock().await.get(&instance_id).map(|r| r.pid);
     let pid = pid.ok_or_else(|| "This instance isn't running".to_string())?;
+    crate::server_automation::mark_stop_requested(&state, &instance_id).await;
     force_kill(&app, &state, &instance_id, pid).await
 }
 
@@ -255,6 +257,10 @@ pub async fn send_instance_command(state: State<'_, AppState>, instance_id: Stri
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Instance not found".to_string())?;
     let game_dir = inst.game_dir(&state.instances_dir());
+    // A `stop` typed into the console is a deliberate shutdown, not a crash.
+    if command.trim().trim_start_matches('/').eq_ignore_ascii_case("stop") {
+        crate::server_automation::mark_stop_requested(&state, &instance_id).await;
+    }
     write_console_line(&state, &game_dir, &instance_id, &command).await
 }
 
@@ -924,6 +930,8 @@ async fn do_launch_server(app: &tauri::AppHandle, state: &AppState, inst: &insta
         .split_whitespace()
         .map(str::to_string)
         .collect();
+    // A leftover flag from an earlier run must not swallow this run's crash.
+    state.stop_requested.lock().await.remove(instance_id);
     let started = std::time::SystemTime::now();
     let exit_code = server_launch::spawn_and_stream_server(
         app,
@@ -937,12 +945,17 @@ async fn do_launch_server(app: &tauri::AppHandle, state: &AppState, inst: &insta
     )
     .await?;
 
+    let crashed = exit_code != 0 || crate::minecraft::exit_info::crashed_since(&game_dir, started);
+    let mut message = crate::minecraft::exit_info::describe("Server", exit_code, &game_dir, started);
+    if let Some(note) = crate::server_automation::handle_exit(app, inst, crashed).await {
+        message.push_str(&note);
+    }
     let _ = app.emit(
         "launch-progress",
         download::DownloadProgress {
             instance_id: instance_id.to_string(),
             stage: "exited".to_string(),
-            message: crate::minecraft::exit_info::describe("Server", exit_code, &game_dir, started),
+            message,
             current: 1,
             total: 1,
         },

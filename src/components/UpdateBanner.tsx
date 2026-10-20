@@ -10,6 +10,22 @@ type Status = "idle" | "downloading" | "installing" | "error";
 // through window events, so there's one updater flow rather than two.
 export const UPDATE_AVAILABLE_EVENT = "mint-update-available";
 const START_UPDATE_EVENT = "mint-update-start";
+const CHECK_REQUEST_EVENT = "mint-update-check-request";
+export const CHECK_STATUS_EVENT = "mint-update-check-status";
+export type UpdateCheckStatus = "checking" | "available" | "none" | "error";
+
+/** How often to look for a new release in the background. One small
+ * request to GitHub each time, so it costs next to nothing. */
+const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** Asks the banner to check for an update now (the status bar's button). */
+export function requestUpdateCheck() {
+  window.dispatchEvent(new Event(CHECK_REQUEST_EVENT));
+}
+
+function announceCheckStatus(status: UpdateCheckStatus) {
+  window.dispatchEvent(new CustomEvent<UpdateCheckStatus>(CHECK_STATUS_EVENT, { detail: status }));
+}
 
 let availableVersion: string | null = null;
 /** The version the startup check found, for a listener that mounts late. */
@@ -51,29 +67,54 @@ export function UpdateBanner() {
     if (status === "error") setShowConsole(true);
   }, [status]);
 
+  // Mirrors `status` for the check below, which runs from timers/events
+  // that would otherwise see a stale value.
+  const statusRef = useRef<Status>("idle");
+  statusRef.current = status;
+
+  // The installed-app updater (Tauri's plugin-updater) downloads and runs
+  // the NSIS/MSI installer, which assumes an installed app at a fixed
+  // location. A portable build has no installer to run, so it checks GitHub
+  // releases directly instead - see check_portable_update in
+  // src-tauri/src/commands/updater.rs. Runs at startup, every few hours
+  // after that, and whenever the status bar's button asks.
+  async function runCheck(manual: boolean) {
+    // Don't swap the update out from under an install in progress.
+    if (statusRef.current === "downloading" || statusRef.current === "installing") return;
+    announceCheckStatus("checking");
+    try {
+      const isPortable = await api.isPortable();
+      setPortable(isPortable);
+      let found = false;
+      if (isPortable) {
+        const info = await api.checkPortableUpdate();
+        if (info) setPortableUpdate(info);
+        found = !!info;
+      } else {
+        const info = await check();
+        if (info) setUpdate(info);
+        found = !!info;
+      }
+      // Asking by hand brings the banner back even after "Later".
+      if (found && manual) setDismissed(false);
+      announceCheckStatus(found ? "available" : "none");
+    } catch {
+      // No update endpoint reachable, or nothing published yet - not worth
+      // interrupting anything over; the status bar says it failed.
+      announceCheckStatus("error");
+    }
+  }
+
   useEffect(() => {
-    // The installed-app updater (Tauri's plugin-updater) downloads and runs
-    // the NSIS/MSI installer, which assumes an installed app at a fixed
-    // location. A portable build has no installer to run, so it checks
-    // GitHub releases directly instead - see check_portable_update in
-    // src-tauri/src/commands/updater.rs.
-    api
-      .isPortable()
-      .then((isPortable) => {
-        setPortable(isPortable);
-        if (isPortable) {
-          return api.checkPortableUpdate().then((found) => {
-            if (found) setPortableUpdate(found);
-          });
-        }
-        return check().then((found) => {
-          if (found) setUpdate(found);
-        });
-      })
-      .catch(() => {
-        // No update endpoint reachable, or nothing published yet - not
-        // worth interrupting startup over.
-      });
+    runCheck(false);
+    const timer = window.setInterval(() => runCheck(false), AUTO_CHECK_INTERVAL_MS);
+    const onRequest = () => runCheck(true);
+    window.addEventListener(CHECK_REQUEST_EVENT, onRequest);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener(CHECK_REQUEST_EVENT, onRequest);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleCopyConsole() {

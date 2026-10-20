@@ -1,5 +1,6 @@
 mod accounts;
 mod auth;
+mod admin_log;
 mod commands;
 mod game_icon;
 mod http_util;
@@ -9,6 +10,7 @@ mod minecraft;
 mod mod_meta;
 mod msa;
 mod remote_api;
+mod server_automation;
 mod server_instance;
 mod settings;
 mod state;
@@ -54,6 +56,7 @@ pub fn run() {
             app.manage(AppState::new(data_dir));
             tauri::async_runtime::spawn(AppState::watch_for_dead_instances(app.handle().clone()));
             tauri::async_runtime::spawn(remote_api::run_supervisor(app.handle().clone()));
+            tauri::async_runtime::spawn(server_automation::run_scheduler(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +72,9 @@ pub fn run() {
             commands::instances::get_server_addresses,
             commands::instances::list_screenshots,
             commands::instances::get_mod_groups,
+            commands::instances::set_server_automation,
+            commands::instances::get_admin_log,
+            commands::instances::clear_admin_log,
             commands::instances::save_mod_groups,
             commands::instances::get_screenshot_thumbnail,
             commands::instances::read_screenshot,

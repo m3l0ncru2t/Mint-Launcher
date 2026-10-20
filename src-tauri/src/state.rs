@@ -101,6 +101,15 @@ pub struct AppState {
     /// Admin-side Mint Connect state (see `tunnel.rs`) - one shared iroh
     /// endpoint plus a loopback proxy per linked host, all created lazily.
     pub tunnel_client: Arc<crate::tunnel::ClientTunnel>,
+    /// Servers someone asked to stop (Stop, Kill, Restart, or a `stop`
+    /// console command) - consumed when the process exits, so a deliberate
+    /// stop is never mistaken for a crash (see `server_automation`).
+    pub stop_requested: Mutex<std::collections::HashSet<String>>,
+    /// When each server was last auto-restarted after a crash - for the
+    /// crash-loop limit.
+    pub auto_restart_history: Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// When each server's restart schedule last fired (local time).
+    pub schedule_last_fired: Mutex<HashMap<String, chrono::DateTime<chrono::Local>>>,
 }
 
 impl AppState {
@@ -123,6 +132,9 @@ impl AppState {
             remote_sessions: Mutex::new(HashMap::new()),
             restart_cancellations: Mutex::new(HashMap::new()),
             tunnel_client: Arc::new(crate::tunnel::ClientTunnel::default()),
+            stop_requested: Mutex::new(std::collections::HashSet::new()),
+            auto_restart_history: Mutex::new(HashMap::new()),
+            schedule_last_fired: Mutex::new(HashMap::new()),
         }
     }
 
@@ -205,6 +217,18 @@ impl AppState {
                     "instance-running-changed",
                     serde_json::json!({ "instanceId": instance_id, "running": false }),
                 );
+                // No exit code for a process Mint didn't spawn (or adopted
+                // after restarting) - judge from its crash reports/log.
+                let inst = crate::instance::get_instance(&state.instances_dir(), &instance_id).ok().flatten();
+                if let Some(inst) = inst.filter(|i| i.auto_restart_on_crash) {
+                    let game_dir = inst.game_dir(&state.instances_dir());
+                    let crashed = tokio::task::spawn_blocking(move || crate::server_automation::looks_like_crash(&game_dir))
+                        .await
+                        .unwrap_or(false);
+                    crate::server_automation::handle_exit(&app, &inst, crashed).await;
+                } else {
+                    state.stop_requested.lock().await.remove(&instance_id);
+                }
             }
         }
     }

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AdminLogEntry,
+  RestartSchedule,
   ScreenshotFile,
   ServerInfo,
   AccountSummary,
@@ -77,6 +79,10 @@ export const api = {
   setServerDomain: (instanceId: string, domain: string) => invoke<void>("set_server_domain", { instanceId, domain }),
   getServerAddresses: (id: string) =>
     invoke<{ localIp: string | null; port: number; domain: string | null }>("get_server_addresses", { id }),
+  setServerAutomation: (id: string, schedule: RestartSchedule, autoRestartOnCrash: boolean) =>
+    invoke<Instance>("set_server_automation", { id, schedule, autoRestartOnCrash }),
+  getAdminLog: (limit?: number) => invoke<AdminLogEntry[]>("get_admin_log", { limit }),
+  clearAdminLog: () => invoke<void>("clear_admin_log"),
   getModGroups: (id: string) => invoke<unknown>("get_mod_groups", { id }),
   saveModGroups: (id: string, groups: unknown) => invoke<void>("save_mod_groups", { id, groups }),
   listScreenshots: (id: string) => invoke<ScreenshotFile[]>("list_screenshots", { id }),

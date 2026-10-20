@@ -2647,3 +2647,137 @@ button {
   padding: 3px 8px;
   margin: 8px 0 4px 4px;
 }
+
+/* ---------- Mod search ---------- */
+
+.mod-search {
+  flex: 0 1 200px;
+  min-width: 90px;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ---------- Restart schedule dialog ---------- */
+
+.schedule-check {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px !important;
+  color: var(--text-0) !important;
+  cursor: pointer;
+}
+
+.schedule-options {
+  padding-left: 22px;
+}
+
+.schedule-times {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0 24px;
+}
+
+.schedule-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-hours {
+  width: 64px;
+}
+
+/* ---------- Admin log ---------- */
+
+.admin-log-modal {
+  width: 760px;
+}
+
+.admin-log-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.admin-log-toolbar input {
+  flex: 1;
+  min-width: 0;
+}
+
+.admin-log-list {
+  max-height: 55vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.admin-log-row {
+  display: grid;
+  grid-template-columns: 150px 120px 150px minmax(0, 1fr);
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+
+.admin-log-row:last-child {
+  border-bottom: none;
+}
+
+.admin-log-time {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.admin-log-actor {
+  color: var(--text-0);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-log-actor.system {
+  color: var(--mint-400);
+}
+
+.admin-log-action {
+  color: var(--text-1);
+}
+
+.admin-log-detail {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+
+.app-status-check {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.app-status-check:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--text-2);
+}
+
+.app-status-check:disabled {
+  cursor: default;
+  opacity: 0.7;
+}

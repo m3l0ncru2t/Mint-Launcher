@@ -72,6 +72,26 @@ export interface Instance {
   // Set for a server imported in place - its mods/world/config live here
   // directly instead of under Mint's own instances folder.
   externalDir: string | null;
+  /** Server only: automatic restarts. */
+  restartSchedule: RestartSchedule;
+  /** Server only: start it again by itself if it crashes. */
+  autoRestartOnCrash: boolean;
+}
+
+export interface RestartSchedule {
+  enabled: boolean;
+  mode: "daily" | "interval";
+  /** "HH:MM", 24-hour, host's local time - for "daily". */
+  times: string[];
+  intervalHours: number;
+}
+
+export interface AdminLogEntry {
+  time: string;
+  actor: string;
+  uuid: string;
+  action: string;
+  detail: string;
 }
 
 export interface ServerDetection {

@@ -3,6 +3,7 @@ import { api } from "../api";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import type { ServerInfo } from "../types";
 import { Motd } from "./Motd";
+import { AdminLogDialog } from "./AdminLogDialog";
 import { getPublicIpCached } from "../lib/publicIp";
 import { formatDuration, useUptime } from "../lib/uptime";
 
@@ -59,6 +60,7 @@ export function ServerInfoPanel({
   const [editingDomain, setEditingDomain] = useState(false);
   const [domainDraft, setDomainDraft] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const [showAdminLog, setShowAdminLog] = useState(false);
   const uptime = useUptime(isRunning ? info?.startedAt : null);
 
   useEffect(() => {
@@ -308,6 +310,13 @@ export function ServerInfoPanel({
 
       <div className="panel-header players-section-header">
         <h4>Server</h4>
+        {!remote && (
+          <div className="panel-actions">
+            <button className="ghost-btn small" onClick={() => setShowAdminLog(true)}>
+              Admin log
+            </button>
+          </div>
+        )}
       </div>
       <div className="mod-row server-info-row">
         <span className="server-info-label">World</span>
@@ -341,6 +350,7 @@ export function ServerInfoPanel({
           {info.opCount} / {info.whitelistCount} / {info.banCount}
         </span>
       </div>
+      {showAdminLog && <AdminLogDialog onClose={() => setShowAdminLog(false)} />}
     </div>
   );
 }

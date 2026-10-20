@@ -115,6 +115,65 @@ pub struct Instance {
     /// original folder when this instance is removed from Mint.
     #[serde(default)]
     pub external_dir: Option<String>,
+    /// Server only: automatic restarts (see `server_automation`).
+    #[serde(default)]
+    pub restart_schedule: RestartSchedule,
+    /// Server only: start it again by itself if it crashes (see
+    /// `server_automation::handle_exit`).
+    #[serde(default)]
+    pub auto_restart_on_crash: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RestartScheduleMode {
+    /// At set times of day (the host's local time).
+    #[default]
+    Daily,
+    /// Whenever the server has been up for `interval_hours`.
+    Interval,
+}
+
+/// When a server restarts itself. Restarts go through the normal restart
+/// path, so players still get the in-game countdown and it can be canceled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartSchedule {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: RestartScheduleMode,
+    /// "HH:MM", 24-hour, for `Daily`.
+    #[serde(default = "default_restart_times")]
+    pub times: Vec<String>,
+    #[serde(default = "default_restart_interval")]
+    pub interval_hours: u32,
+}
+
+fn default_restart_times() -> Vec<String> {
+    vec!["05:00".to_string()]
+}
+
+fn default_restart_interval() -> u32 {
+    12
+}
+
+impl Default for RestartSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: RestartScheduleMode::Daily,
+            times: default_restart_times(),
+            interval_hours: default_restart_interval(),
+        }
+    }
+}
+
+/// Parses "HH:MM" (24-hour) into minutes after midnight.
+pub fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.trim().split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
 }
 
 impl Instance {
@@ -276,6 +335,8 @@ pub fn create_instance(
         kind,
         eula_accepted: false,
         external_dir: None,
+        restart_schedule: RestartSchedule::default(),
+        auto_restart_on_crash: false,
     };
     instance.save(instances_root)?;
 

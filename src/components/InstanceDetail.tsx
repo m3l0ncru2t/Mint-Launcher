@@ -6,6 +6,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { InstanceFilesPanel } from "./InstanceFilesPanel";
 import { InstanceIcon } from "./InstanceIcon";
 import { ServersDialog } from "./ServersDialog";
+import { nextScheduledRestart, ServerScheduleDialog } from "./ServerScheduleDialog";
 import type { Instance, LaunchProgressEvent, ProcessStats, TpsInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import { useUptime } from "../lib/uptime";
@@ -131,6 +132,7 @@ export function InstanceDetail({
   // when switching back to an instance that's still playing.
   const [starting, setStarting] = useState(false);
   const [showServers, setShowServers] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const [serverCount, setServerCount] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -154,6 +156,7 @@ export function InstanceDetail({
 
   const [stats, setStats] = useState<ProcessStats | null>(null);
   const addresses = useServerAddresses(isServer ? instance.id : null);
+  const nextRestart = isServer ? nextScheduledRestart(instance, stats?.startTime) : null;
   const uptime = useUptime(isServer && isRunning ? stats?.startTime : null);
 
   useEffect(() => {
@@ -418,6 +421,11 @@ export function InstanceDetail({
             {instance.versionId} · {instance.loader}
             {instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}
             {uptime ? ` · up ${uptime}` : ""}
+            {nextRestart && isRunning
+              ? ` · restarts ${nextRestart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${
+                  nextRestart.toDateString() === new Date().toDateString() ? "" : " tomorrow"
+                }`
+              : ""}
             {!isServer && instance.lastPlayed ? ` · last played ${new Date(instance.lastPlayed).toLocaleString()}` : ""}
           </div>
           {addresses && (
@@ -442,6 +450,15 @@ export function InstanceDetail({
           <button className="ghost-btn" onClick={handleExport} disabled={exporting}>
             {exporting ? "Backing up…" : "Backup"}
           </button>
+          {isServer && (
+            <button
+              className="ghost-btn"
+              onClick={() => setShowSchedule(true)}
+              title="Scheduled restarts and restarting after a crash"
+            >
+              Schedule
+            </button>
+          )}
           {!isServer && (
             <button className="ghost-btn" onClick={() => setShowServers(true)}>
               Servers{serverCount > 0 ? ` (${serverCount})` : ""}
@@ -683,6 +700,10 @@ export function InstanceDetail({
           </>
         )}
       </div>
+
+      {isServer && showSchedule && (
+        <ServerScheduleDialog instance={instance} onClose={() => setShowSchedule(false)} onSaved={onChanged} />
+      )}
 
       {!isServer && showServers && (
         <ServersDialog

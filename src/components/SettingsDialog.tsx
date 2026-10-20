@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { AdminLogDialog } from "./AdminLogDialog";
 import { SkinCapeDialog } from "./SkinCapeDialog";
 import { BACKGROUND_THEMES } from "../themes";
 import type { CustomBackgroundInfo, GameProfile, Instance, OpEntry, Settings } from "../types";
@@ -32,6 +33,7 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
   const [codeCopied, setCodeCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const opacitySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showAdminLog, setShowAdminLog] = useState(false);
   const textColorSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeThemeKey = settings.backgroundTheme ?? "default";
@@ -486,6 +488,9 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
               />
               Let other admins connect to this server remotely
             </label>
+            <button className="ghost-btn small" style={{ marginLeft: 8 }} onClick={() => setShowAdminLog(true)}>
+              View admin log
+            </button>
             <div className="hint">
               Lets a trusted admin's own Mint Launcher connect over a private network (Tailscale, WireGuard - never
               the public internet) to see the console, manage mods, and start/stop/restart. They're let in based on
@@ -650,6 +655,8 @@ export function SettingsDialog({ profile, settings, onSettingsChange, onClose, i
           </button>
         </div>
       </div>
+
+      {showAdminLog && <AdminLogDialog onClose={() => setShowAdminLog(false)} />}
 
       {showSkinCape && profile && (
         <SkinCapeDialog uuid={profile.uuid} onClose={() => setShowSkinCape(false)} />

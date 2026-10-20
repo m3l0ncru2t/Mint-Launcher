@@ -1565,3 +1565,45 @@ pub fn save_mod_groups(state: State<AppState>, id: String, groups: serde_json::V
     }
     std::fs::write(dir.join(".mint_mod_groups.json"), text).map_err(|e| e.to_string())
 }
+
+/// Saves a server's restart schedule and crash auto-restart switch.
+#[tauri::command(async)]
+pub fn set_server_automation(
+    state: State<AppState>,
+    id: String,
+    schedule: crate::instance::RestartSchedule,
+    auto_restart_on_crash: bool,
+) -> Result<Instance, String> {
+    let mut inst = resolve_instance(&state, &id)?;
+    if inst.kind != InstanceKind::Server {
+        return Err("This isn't a server instance".to_string());
+    }
+    let mut schedule = schedule;
+    // Normalize to sorted, de-duplicated "HH:MM".
+    let mut minutes: Vec<u32> = schedule
+        .times
+        .iter()
+        .map(|t| crate::instance::parse_hhmm(t).ok_or_else(|| format!("\"{t}\" isn't a time like 05:00")))
+        .collect::<Result<_, _>>()?;
+    minutes.sort_unstable();
+    minutes.dedup();
+    if schedule.enabled && schedule.mode == crate::instance::RestartScheduleMode::Daily && minutes.is_empty() {
+        return Err("Add at least one restart time".to_string());
+    }
+    schedule.times = minutes.iter().map(|m| format!("{:02}:{:02}", m / 60, m % 60)).collect();
+    schedule.interval_hours = schedule.interval_hours.clamp(1, 168);
+    inst.restart_schedule = schedule;
+    inst.auto_restart_on_crash = auto_restart_on_crash;
+    inst.save(&state.instances_dir()).map_err(|e| e.to_string())?;
+    Ok(inst)
+}
+
+#[tauri::command(async)]
+pub fn get_admin_log(state: State<AppState>, limit: Option<usize>) -> Vec<crate::admin_log::LogEntry> {
+    crate::admin_log::read(&state.data_dir, limit.unwrap_or(1000).min(5000))
+}
+
+#[tauri::command(async)]
+pub fn clear_admin_log(state: State<AppState>) -> Result<(), String> {
+    crate::admin_log::clear(&state.data_dir).map_err(|e| e.to_string())
+}
