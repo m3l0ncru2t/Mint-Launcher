@@ -210,6 +210,14 @@ export interface ProcessStats {
   startTime: number;
 }
 
+export interface ShaderPackList {
+  /** `enabled` marks the one active pack - Iris runs one at a time. */
+  packs: ResourcePackFile[];
+  /** Iris runs on Fabric and Quilt only. */
+  loaderSupported: boolean;
+  irisInstalled: boolean;
+}
+
 /** What a running client is doing, read off its log (see client_activity.rs). */
 export interface ClientActivity {
   state: "menu" | "joining" | "server" | "failed" | "disconnected" | "singleplayer";

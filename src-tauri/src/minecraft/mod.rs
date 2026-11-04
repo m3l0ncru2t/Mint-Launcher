@@ -19,3 +19,4 @@ pub mod server_launch;
 pub mod server_ping;
 pub mod server_properties;
 pub mod servers_dat;
+pub mod shaderpacks;

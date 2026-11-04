@@ -33,6 +33,7 @@ import type {
   ServerDetection,
   ServerEntry,
   ServerStatus,
+  ShaderPackList,
   Settings,
   SuggestedPath,
   TpsInfo,
@@ -179,6 +180,22 @@ export const api = {
 
   applyResourcepackUpdate: (id: string, oldFileName: string, downloadUrl: string) =>
     invoke<void>("apply_resourcepack_update", { id, oldFileName, downloadUrl }),
+
+  listShaderpacks: (id: string) => invoke<ShaderPackList>("list_shaderpacks", { id }),
+  /** `null` turns shaders off. */
+  setActiveShaderpack: (id: string, fileName: string | null) =>
+    invoke<void>("set_active_shaderpack", { id, fileName }),
+  deleteShaderpack: (id: string, fileName: string) => invoke<void>("delete_shaderpack", { id, fileName }),
+  getShaderpacksDir: (id: string) => invoke<string>("get_shaderpacks_dir", { id }),
+  searchShaderpacks: (id: string, query: string, offset: number) =>
+    invoke<ModSearchPage>("search_shaderpacks", { id, query, offset }),
+  installShaderpack: (id: string, projectId: string) =>
+    invoke<InstalledModInfo>("install_shaderpack", { id, projectId }),
+  getShaderpackProjectInfo: (id: string, projectId: string) =>
+    invoke<ModProjectDetails>("get_shaderpack_project_info", { id, projectId }),
+  checkShaderpackUpdates: (id: string) => invoke<ModUpdateInfo[]>("check_shaderpack_updates", { id }),
+  applyShaderpackUpdate: (id: string, oldFileName: string, downloadUrl: string) =>
+    invoke<void>("apply_shaderpack_update", { id, oldFileName, downloadUrl }),
 
   getProjectInfo: (id: string, projectId: string) =>
     invoke<ModProjectDetails>("get_project_info", { id, projectId }),

@@ -204,6 +204,10 @@ impl Instance {
         self.game_dir(instances_root).join("resourcepacks")
     }
 
+    pub fn shaderpacks_dir(&self, instances_root: &Path) -> PathBuf {
+        self.game_dir(instances_root).join("shaderpacks")
+    }
+
     fn meta_path(&self, instances_root: &Path) -> PathBuf {
         self.dir(instances_root).join("instance.json")
     }

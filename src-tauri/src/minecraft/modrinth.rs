@@ -174,6 +174,18 @@ pub async fn check_resourcepack_updates(
         .await
 }
 
+/// Shader packs are `.zip`s like resource packs, but versioned per shader
+/// loader - only Iris counts, since that's what Fabric/Quilt run them with.
+pub async fn check_shaderpack_updates(
+    client: &reqwest::Client,
+    shaderpacks_dir: &Path,
+    game_version: &str,
+    on_result: impl FnMut(&ModUpdateInfo),
+) -> anyhow::Result<Vec<ModUpdateInfo>> {
+    check_updates_matching(client, shaderpacks_dir, game_version, Some("iris"), |lower| lower.ends_with(".zip"), on_result)
+        .await
+}
+
 /// `on_result` fires once per file as its check actually finishes - each one
 /// needs its own couple of Modrinth round trips (latest-version lookup, then
 /// project info for the title/icon, sequentially per file previously), so a
@@ -358,14 +370,15 @@ async fn fetch_latest_compatible(
     Ok(versions.into_iter().next())
 }
 
-/// Downloads a mod update and replaces the old file. Only accepts URLs on
-/// Modrinth's own CDN, since the filename is derived from it.
+/// Downloads a mod update and replaces the old file, returning the new
+/// file's name. Only accepts URLs on Modrinth's own CDN, since the filename
+/// is derived from it.
 pub async fn apply_update(
     client: &reqwest::Client,
     mods_dir: &Path,
     old_file_name: &str,
     download_url: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     if !download_url.starts_with("https://cdn.modrinth.com/") {
         anyhow::bail!("Refusing to download from an unexpected host");
     }
@@ -390,7 +403,7 @@ pub async fn apply_update(
     if new_path != old_path {
         let _ = std::fs::remove_file(&old_path);
     }
-    Ok(())
+    Ok(new_file_name.to_string())
 }
 
 /// Like `installed_project_ids`/`installed_resourcepack_project_ids`, but
@@ -517,6 +530,21 @@ pub async fn search_resourcepacks(
     resourcepacks_dir: &Path,
 ) -> anyhow::Result<ModSearchPage> {
     search_projects(client, query, game_version, None, "resourcepack", offset, resourcepacks_dir, |lower| {
+        lower.ends_with(".zip")
+    })
+    .await
+}
+
+/// Iris shader packs for this game version (Modrinth tags a shader's
+/// loaders - iris, optifine, canvas - as categories).
+pub async fn search_shaderpacks(
+    client: &reqwest::Client,
+    query: &str,
+    game_version: &str,
+    offset: u32,
+    shaderpacks_dir: &Path,
+) -> anyhow::Result<ModSearchPage> {
+    search_projects(client, query, game_version, Some("iris"), "shader", offset, shaderpacks_dir, |lower| {
         lower.ends_with(".zip")
     })
     .await
@@ -726,9 +754,10 @@ pub async fn install_mod(
     })
 }
 
-/// The set of Modrinth project ids already present in `resourcepacks_dir`,
-/// identified by hash - same approach as `installed_project_ids`, but
-/// resource packs have no ".disabled" convention to also match.
+/// The set of Modrinth project ids already present as `.zip`s in a pack
+/// folder (resource packs or shader packs), identified by hash - same
+/// approach as `installed_project_ids`, but packs have no ".disabled"
+/// convention to also match.
 async fn installed_resourcepack_project_ids(
     client: &reqwest::Client,
     resourcepacks_dir: &Path,
@@ -760,43 +789,40 @@ async fn installed_resourcepack_project_ids(
     Ok(matched.into_values().map(|v| v.project_id).collect())
 }
 
-/// Installs a resource pack. Unlike mods, resource packs have no loader and
-/// (in practice) no dependency graph worth resolving, so this is a single
-/// download rather than `install_mod`'s recursive walk. Also switches it on
-/// in `options.txt` - unlike mods (enabled just by not having a
-/// `.disabled` suffix), a resource pack sitting in the folder isn't active
-/// in-game until it's added to the `resourcePacks` list, so leaving this out
-/// would install a pack that looks present but silently does nothing.
-pub async fn install_resourcepack(
+/// Downloads the latest compatible version of a single-file pack project
+/// (a resource pack or shader pack) into `dir`. Unlike mods there's no
+/// dependency graph worth resolving, so this is a single download rather
+/// than `install_mod`'s recursive walk. `what` names the kind in errors.
+async fn install_pack(
     client: &reqwest::Client,
-    resourcepacks_dir: &Path,
-    game_dir: &Path,
+    dir: &Path,
     game_version: &str,
+    loader: Option<&str>,
     project_id: &str,
+    what: &str,
 ) -> anyhow::Result<InstalledModInfo> {
-    std::fs::create_dir_all(resourcepacks_dir)?;
+    std::fs::create_dir_all(dir)?;
 
-    let already_present = installed_resourcepack_project_ids(client, resourcepacks_dir).await?;
+    let already_present = installed_resourcepack_project_ids(client, dir).await?;
     if already_present.contains(project_id) {
-        anyhow::bail!("This resource pack is already installed");
+        anyhow::bail!("This {what} is already installed");
     }
 
-    let version = fetch_latest_compatible(client, project_id, game_version, None)
+    let version = fetch_latest_compatible(client, project_id, game_version, loader)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("No version of this resource pack is compatible with this Minecraft version"))?;
+        .ok_or_else(|| anyhow::anyhow!("No version of this {what} is compatible with this Minecraft version"))?;
 
     let file = version
         .files
         .iter()
         .find(|f| f.primary)
         .or(version.files.first())
-        .ok_or_else(|| anyhow::anyhow!("This resource pack has no downloadable file"))?;
+        .ok_or_else(|| anyhow::anyhow!("This {what} has no downloadable file"))?;
 
     let resp = client.get(&file.url).send().await?;
-    let resp = ensure_success(resp, "Downloading resource pack").await?;
+    let resp = ensure_success(resp, &format!("Downloading {what}")).await?;
     let bytes = resp.bytes().await?;
-    std::fs::write(resourcepacks_dir.join(&file.filename), &bytes)?;
-    let _ = super::resourcepacks::set_resourcepack_enabled(game_dir, &file.filename, true);
+    std::fs::write(dir.join(&file.filename), &bytes)?;
 
     let title = fetch_project_info(client, project_id)
         .await
@@ -808,6 +834,37 @@ pub async fn install_resourcepack(
         title,
         file_name: file.filename.clone(),
     })
+}
+
+/// Installs a resource pack and switches it on in `options.txt` - unlike
+/// mods (enabled just by not having a `.disabled` suffix), a resource pack
+/// sitting in the folder isn't active in-game until it's added to the
+/// `resourcePacks` list, so leaving this out would install a pack that looks
+/// present but silently does nothing.
+pub async fn install_resourcepack(
+    client: &reqwest::Client,
+    resourcepacks_dir: &Path,
+    game_dir: &Path,
+    game_version: &str,
+    project_id: &str,
+) -> anyhow::Result<InstalledModInfo> {
+    let info = install_pack(client, resourcepacks_dir, game_version, None, project_id, "resource pack").await?;
+    let _ = super::resourcepacks::set_resourcepack_enabled(game_dir, &info.file_name, true);
+    Ok(info)
+}
+
+/// Installs an Iris shader pack and makes it the active one - installing a
+/// shader is almost always to try it.
+pub async fn install_shaderpack(
+    client: &reqwest::Client,
+    shaderpacks_dir: &Path,
+    game_dir: &Path,
+    game_version: &str,
+    project_id: &str,
+) -> anyhow::Result<InstalledModInfo> {
+    let info = install_pack(client, shaderpacks_dir, game_version, Some("iris"), project_id, "shader pack").await?;
+    let _ = super::shaderpacks::set_active_shaderpack(game_dir, Some(&info.file_name));
+    Ok(info)
 }
 
 #[derive(Debug, Clone, Serialize)]

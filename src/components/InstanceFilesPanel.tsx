@@ -9,6 +9,7 @@ import { ResourcePacksPanel } from "./ResourcePacksPanel";
 import { ScreenshotsPanel } from "./ScreenshotsPanel";
 import { ServerInfoPanel } from "./ServerInfoPanel";
 import { ServerConsolePanel } from "./ServerConsolePanel";
+import { ShaderPacksPanel } from "./ShaderPacksPanel";
 
 interface Props {
   instanceId: string;
@@ -18,7 +19,7 @@ interface Props {
   showConfigsLogsTabs: boolean;
 }
 
-type Tab = "mods" | "resourcepacks" | "configs" | "logs" | "console" | "chat" | "players" | "server" | "screenshots";
+type Tab = "mods" | "resourcepacks" | "shaderpacks" | "configs" | "logs" | "console" | "chat" | "players" | "server" | "screenshots";
 
 export function InstanceFilesPanel({ instanceId, isServer, logLines, isRunning, showConfigsLogsTabs }: Props) {
   const [tab, setTab] = useState<Tab>(isServer ? "console" : "mods");
@@ -35,6 +36,7 @@ export function InstanceFilesPanel({ instanceId, isServer, logLines, isRunning, 
   const tabs: { id: Tab; label: string }[] = [
     { id: "mods", label: "Mods" },
     { id: "resourcepacks", label: "Resource Packs" },
+    ...(!isServer ? [{ id: "shaderpacks" as Tab, label: "Shaders" }] : []),
     ...(!isServer ? [{ id: "screenshots" as Tab, label: "Screenshots" }] : []),
     ...(showConfigsLogsTabs ? [{ id: "configs" as Tab, label: "Configs" }] : []),
     ...(showConfigsLogsTabs ? [{ id: "logs" as Tab, label: "Logs" }] : []),
@@ -63,6 +65,7 @@ export function InstanceFilesPanel({ instanceId, isServer, logLines, isRunning, 
       </div>
       {activeTab === "mods" && <ModsPanel instanceId={instanceId} />}
       {activeTab === "resourcepacks" && <ResourcePacksPanel instanceId={instanceId} />}
+      {activeTab === "shaderpacks" && !isServer && <ShaderPacksPanel instanceId={instanceId} />}
       {activeTab === "configs" && showConfigsLogsTabs && <ConfigsPanel instanceId={instanceId} />}
       {activeTab === "logs" && showConfigsLogsTabs && <LogsPanel instanceId={instanceId} />}
       {activeTab === "console" && isServer && (

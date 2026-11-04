@@ -10,6 +10,7 @@ interface Props {
   installedMsg?: string;
   onInstall: (projectId: string) => void;
   onClose: () => void;
+  kind?: "resourcepack" | "shader";
 }
 
 function formatDownloads(n: number): string {
@@ -25,6 +26,7 @@ export function ResourcePackProjectInfoDialog({
   installedMsg,
   onInstall,
   onClose,
+  kind = "resourcepack",
 }: Props) {
   const [details, setDetails] = useState<ModProjectDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +36,7 @@ export function ResourcePackProjectInfoDialog({
   const statusText = installedMsg ?? (result.installed ? (outdated ? "Installed · update available" : "✓ Installed and up to date") : null);
 
   useEffect(() => {
-    api
-      .getResourcepackProjectInfo(instanceId, result.projectId)
+    (kind === "shader" ? api.getShaderpackProjectInfo : api.getResourcepackProjectInfo)(instanceId, result.projectId)
       .then(setDetails)
       .catch((e) => setError(String(e)));
   }, [instanceId, result.projectId]);
@@ -93,7 +94,7 @@ export function ResourcePackProjectInfoDialog({
         <div className="modal-actions">
           <button
             className="ghost-btn"
-            onClick={() => openUrl(details?.projectUrl ?? `https://modrinth.com/resourcepack/${result.slug}`)}
+            onClick={() => openUrl(details?.projectUrl ?? `https://modrinth.com/${kind}/${result.slug}`)}
           >
             View on Modrinth
           </button>

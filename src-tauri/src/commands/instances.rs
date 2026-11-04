@@ -32,6 +32,10 @@ fn resolve_resourcepacks_dir(state: &AppState, id: &str) -> Result<std::path::Pa
     Ok(resolve_instance(state, id)?.resourcepacks_dir(&state.instances_dir()))
 }
 
+fn resolve_shaderpacks_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
+    Ok(resolve_instance(state, id)?.shaderpacks_dir(&state.instances_dir()))
+}
+
 fn resolve_config_dir(state: &AppState, id: &str) -> Result<std::path::PathBuf, String> {
     Ok(resolve_instance(state, id)?.game_dir(&state.instances_dir()).join("config"))
 }
@@ -658,6 +662,7 @@ pub async fn apply_mod_update(
     let dir = resolve_mods_dir(&state, &id)?;
     crate::minecraft::modrinth::apply_update(&state.http, &dir, &old_file_name, &download_url)
         .await
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
@@ -802,10 +807,19 @@ pub async fn apply_resourcepack_update(
     old_file_name: String,
     download_url: String,
 ) -> Result<(), String> {
-    let dir = resolve_resourcepacks_dir(&state, &id)?;
-    crate::minecraft::modrinth::apply_update(&state.http, &dir, &old_file_name, &download_url)
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.resourcepacks_dir(&state.instances_dir());
+    let game_dir = inst.game_dir(&state.instances_dir());
+    let was_enabled = crate::minecraft::resourcepacks::enabled_resourcepacks(&game_dir).contains(&old_file_name);
+    let new_file_name = crate::minecraft::modrinth::apply_update(&state.http, &dir, &old_file_name, &download_url)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // options.txt lists packs by file name, and the update's name differs.
+    if was_enabled && new_file_name != old_file_name {
+        let _ = crate::minecraft::resourcepacks::set_resourcepack_enabled(&game_dir, &old_file_name, false);
+        let _ = crate::minecraft::resourcepacks::set_resourcepack_enabled(&game_dir, &new_file_name, true);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -855,6 +869,154 @@ pub async fn install_resourcepack(
     crate::minecraft::modrinth::install_resourcepack(&state.http, &dir, &game_dir, &inst.version_id, &project_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderPackList {
+    /// `enabled` marks the one active pack (Iris runs one at a time).
+    pub packs: Vec<ResourcePackFile>,
+    /// Iris (the shader mod) runs on Fabric and Quilt only.
+    pub loader_supported: bool,
+    pub iris_installed: bool,
+}
+
+// `async` for the same folder-size walk as `list_resourcepacks`.
+#[tauri::command(async)]
+pub fn list_shaderpacks(state: State<AppState>, id: String) -> Result<ShaderPackList, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.shaderpacks_dir(&state.instances_dir());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let active = crate::minecraft::shaderpacks::active_shaderpack(&inst.game_dir(&state.instances_dir()));
+
+    let mut packs = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        // Zips, or unzipped pack folders - Iris loads both.
+        let size = if file_type.is_dir() {
+            crate::minecraft::resourcepacks::dir_size(&entry.path())
+        } else if file_type.is_file() && file_name.to_lowercase().ends_with(".zip") {
+            entry.metadata().map_err(|e| e.to_string())?.len()
+        } else {
+            continue;
+        };
+        let enabled = active.as_deref() == Some(file_name.as_str());
+        packs.push(ResourcePackFile { file_name, size, enabled });
+    }
+    packs.sort_by(|a, b| a.file_name.to_lowercase().cmp(&b.file_name.to_lowercase()));
+    Ok(ShaderPackList {
+        packs,
+        loader_supported: matches!(inst.loader, ModLoader::Fabric | ModLoader::Quilt),
+        iris_installed: crate::minecraft::shaderpacks::iris_installed(&inst.mods_dir(&state.instances_dir())),
+    })
+}
+
+/// Makes `file_name` the active shader pack; `None` turns shaders off.
+#[tauri::command]
+pub fn set_active_shaderpack(state: State<AppState>, id: String, file_name: Option<String>) -> Result<(), String> {
+    let inst = resolve_instance(&state, &id)?;
+    if let Some(name) = &file_name {
+        safe_child(&inst.shaderpacks_dir(&state.instances_dir()), name)?;
+    }
+    crate::minecraft::shaderpacks::set_active_shaderpack(&inst.game_dir(&state.instances_dir()), file_name.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_shaderpack(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
+    let path = safe_child(&resolve_shaderpacks_dir(&state, &id)?, &file_name)?;
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub fn get_shaderpacks_dir(state: State<AppState>, id: String) -> Result<String, String> {
+    let dir = resolve_shaderpacks_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn search_shaderpacks(
+    state: State<'_, AppState>,
+    id: String,
+    query: String,
+    offset: u32,
+) -> Result<crate::minecraft::modrinth::ModSearchPage, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.shaderpacks_dir(&state.instances_dir());
+    crate::minecraft::modrinth::search_shaderpacks(&state.http, &query, &inst.version_id, offset, &dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn install_shaderpack(
+    state: State<'_, AppState>,
+    id: String,
+    project_id: String,
+) -> Result<crate::minecraft::modrinth::InstalledModInfo, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.shaderpacks_dir(&state.instances_dir());
+    let game_dir = inst.game_dir(&state.instances_dir());
+    crate::minecraft::modrinth::install_shaderpack(&state.http, &dir, &game_dir, &inst.version_id, &project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_shaderpack_project_info(
+    state: State<'_, AppState>,
+    id: String,
+    project_id: String,
+) -> Result<crate::minecraft::modrinth::ModProjectDetails, String> {
+    let inst = resolve_instance(&state, &id)?;
+    crate::minecraft::modrinth::fetch_project_details(&state.http, &project_id, &inst.version_id, Some("iris"), "shader")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// See `check_resourcepack_updates`.
+#[tauri::command]
+pub async fn check_shaderpack_updates(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<crate::minecraft::modrinth::ModUpdateInfo>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.shaderpacks_dir(&state.instances_dir());
+    crate::minecraft::modrinth::check_shaderpack_updates(&state.http, &dir, &inst.version_id, |info| {
+        let _ = app.emit("shaderpack-update-checked", serde_json::json!({ "instanceId": id, "info": info }));
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_shaderpack_update(
+    state: State<'_, AppState>,
+    id: String,
+    old_file_name: String,
+    download_url: String,
+) -> Result<(), String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.shaderpacks_dir(&state.instances_dir());
+    let game_dir = inst.game_dir(&state.instances_dir());
+    let was_active =
+        crate::minecraft::shaderpacks::active_shaderpack(&game_dir).as_deref() == Some(old_file_name.as_str());
+    let new_file_name = crate::minecraft::modrinth::apply_update(&state.http, &dir, &old_file_name, &download_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Iris names the active pack by file name, and the update's name differs.
+    if was_active {
+        let _ = crate::minecraft::shaderpacks::set_active_shaderpack(&game_dir, Some(&new_file_name));
+    }
+    Ok(())
 }
 
 #[tauri::command]
