@@ -3299,7 +3299,7 @@ dependencies = [
 
 [[package]]
 name = "mint-launcher"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3309,6 +3309,7 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "iroh",
+ "libc",
  "md-5",
  "png 0.17.16",
  "rand 0.10.2",

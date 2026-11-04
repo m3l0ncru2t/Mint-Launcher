@@ -210,6 +210,18 @@ export interface ProcessStats {
   startTime: number;
 }
 
+/** What a running client is doing, read off its log (see client_activity.rs). */
+export interface ClientActivity {
+  state: "menu" | "joining" | "server" | "failed" | "disconnected" | "singleplayer";
+  player: string | null;
+  server: string | null;
+  serverName: string | null;
+  world: string | null;
+  /** "HH:MM" (24h) from the log. */
+  since: string | null;
+  reason: string | null;
+}
+
 export interface RestartCountdownEvent {
   instanceId: string;
   /** Seconds left in the pre-restart warning, or `null` once the countdown

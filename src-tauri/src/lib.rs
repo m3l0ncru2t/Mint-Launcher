@@ -194,6 +194,7 @@ pub fn run() {
             commands::launch::get_server_tps,
             commands::launch::list_running_instances,
             commands::launch::get_process_stats,
+            commands::launch::get_client_activity,
             commands::launch::detect_running_server,
             commands::updater::is_portable,
             commands::updater::check_portable_update,

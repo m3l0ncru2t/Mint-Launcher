@@ -167,8 +167,12 @@ export function Sidebar({
       <div className="sidebar-header">
         <img src={appIcon} alt="" className="logo" />
         <h1>Mint Launcher</h1>
-        <button className="donate-btn" onClick={() => openUrl("https://buymeacoffee.com/mintymc")} title="Buy me a coffee">
-          Donate
+        <button
+          className="support-btn"
+          onClick={() => openUrl("https://buymeacoffee.com/mintymc")}
+          title="Support Mint Launcher (Buy me a coffee)"
+        >
+          Support
         </button>
       </div>
 

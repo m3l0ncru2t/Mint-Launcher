@@ -317,6 +317,7 @@ export default function App() {
           progress={progressByInstance[selectedInstance.id] ?? null}
           logLines={logsByInstance[selectedInstance.id] ?? []}
           pid={runningByInstance[selectedInstance.id]?.pid ?? null}
+          running={runningByInstance[selectedInstance.id] ?? null}
           restartCountdown={restartCountdownByInstance[selectedInstance.id] ?? null}
           showConfigsLogsTabs={settings.experimentalConfigsLogsTabs}
           spaciousView={settings.spaciousInstanceView}

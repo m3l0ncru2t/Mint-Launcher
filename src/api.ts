@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AdminLogEntry,
+  ClientActivity,
   RestartSchedule,
   ScreenshotFile,
   ServerInfo,
@@ -192,6 +193,7 @@ export const api = {
   listOnlinePlayers: (instanceId: string) => invoke<ServerStatus>("list_online_players", { instanceId }),
 
   getServerTps: (instanceId: string) => invoke<TpsInfo | null>("get_server_tps", { instanceId }),
+  getClientActivity: (instanceId: string) => invoke<ClientActivity>("get_client_activity", { instanceId }),
 
   updateInstanceSettings: (
     id: string,

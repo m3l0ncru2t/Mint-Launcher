@@ -83,6 +83,21 @@ async fn write_console_line(
     instance_id: &str,
     line: &str,
 ) -> Result<(), String> {
+    if write_stdin_line(state, instance_id, line).await {
+        return Ok(());
+    }
+    let line = rcon_say_as_server(line).unwrap_or_else(|| line.to_string());
+    rcon_execute(game_dir, &line)
+        .await
+        .map(|_| ())
+        .map_err(|_| "Console access isn't available for this server".to_string())
+}
+
+/// Writes one line to the server's real console input: the stdin pipe this
+/// Mint process holds, or (Linux/macOS) the console FIFO, which still works
+/// after Mint restarts (see `minecraft::console_fifo`). `false` if neither
+/// is there.
+async fn write_stdin_line(state: &AppState, instance_id: &str, line: &str) -> bool {
     let stdin = state.instance_stdins.lock().await.get(instance_id).cloned();
     if let Some(stdin) = stdin {
         let mut stdin = stdin.lock().await;
@@ -90,13 +105,32 @@ async fn write_console_line(
             && stdin.write_all(b"\n").await.is_ok()
             && stdin.flush().await.is_ok();
         if sent {
-            return Ok(());
+            return true;
         }
     }
-    rcon_execute(game_dir, line)
-        .await
-        .map(|_| ())
-        .map_err(|_| "Console access isn't available for this server".to_string())
+    #[cfg(unix)]
+    {
+        let fifo = crate::minecraft::console_fifo::path(&state.data_dir, instance_id);
+        let line = line.to_string();
+        tauri::async_runtime::spawn_blocking(move || crate::minecraft::console_fifo::write_line(&fifo, &line))
+            .await
+            .is_ok_and(|r| r.is_ok())
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+/// Over RCON, vanilla credits `say` to "Rcon" ("[Rcon] hi") rather than the
+/// "[Server] hi" the real console gives, so it's sent as the same
+/// announcement through `tellraw` instead. (Unlike `say`, that isn't written
+/// to the server log.)
+fn rcon_say_as_server(line: &str) -> Option<String> {
+    let message = line.trim_start().trim_start_matches('/').strip_prefix("say ")?.trim();
+    if message.is_empty() {
+        return None;
+    }
+    let text = serde_json::json!({ "translate": "chat.type.announcement", "with": ["Server", message] });
+    Some(format!("tellraw @a {text}"))
 }
 
 /// Broadcasts a `say` countdown (60s, 30s, 10s, then "now") to any connected
@@ -364,11 +398,8 @@ async fn list_via_stdin(
     game_dir: &std::path::Path,
     instance_id: &str,
 ) -> Option<(u32, u32, Vec<String>)> {
-    let stdin = state.instance_stdins.lock().await.get(instance_id).cloned()?;
-    {
-        let mut stdin = stdin.lock().await;
-        stdin.write_all(b"list\n").await.ok()?;
-        stdin.flush().await.ok()?;
+    if !write_stdin_line(state, instance_id, "list").await {
+        return None;
     }
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let log_path = game_dir.join("logs").join("latest.log");
@@ -432,6 +463,44 @@ pub async fn list_online_players(
     })
 }
 
+/// What a running client is doing (see `minecraft::client_activity`), for
+/// its "Minecraft is running" card.
+#[tauri::command]
+pub async fn get_client_activity(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<crate::minecraft::client_activity::ClientActivity, String> {
+    use crate::minecraft::client_activity::{self, ClientState};
+    let inst = instance::get_instance(&state.instances_dir(), &instance_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Instance not found".to_string())?;
+    let game_dir = inst.game_dir(&state.instances_dir());
+    let started = instance_start_time(&state, &instance_id).await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let log = game_dir.join("logs").join("latest.log");
+        // Until the game rotates it, latest.log is still the last run's.
+        let modified = log
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        if started.is_some_and(|s| modified.is_none_or(|m| m < s)) {
+            return client_activity::ClientActivity::default();
+        }
+        let mut activity = client_activity::parse(&tail_lines(&log, 8 * 1024 * 1024));
+        if activity.state == ClientState::Singleplayer {
+            activity.world = client_activity::current_world(&game_dir);
+        }
+        if let Some(server) = &activity.server {
+            activity.server_name = client_activity::server_list_name(&game_dir, server);
+        }
+        activity
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TpsInfo {
@@ -461,11 +530,8 @@ fn parse_gametime_response(text: &str) -> Option<i64> {
 }
 
 async fn gametime_via_stdin(state: &AppState, game_dir: &std::path::Path, instance_id: &str) -> Option<i64> {
-    let stdin = state.instance_stdins.lock().await.get(instance_id).cloned()?;
-    {
-        let mut stdin = stdin.lock().await;
-        stdin.write_all(b"time query gametime\n").await.ok()?;
-        stdin.flush().await.ok()?;
+    if !write_stdin_line(state, instance_id, "time query gametime").await {
+        return None;
     }
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     // 8KB, matching `list_via_stdin` - a busy modded server can log a lot in

@@ -94,6 +94,28 @@ pub fn looks_like_crash(game_dir: &std::path::Path) -> bool {
     !tail.contains("Stopping server") && !tail.contains("All dimensions are saved")
 }
 
+/// Whether one of a daily schedule's `times` has just passed and hasn't
+/// fired yet. Counted in seconds: whole minutes round toward zero, which
+/// made 04:59:01 count as "0 minutes after 05:00" - firing early, then again
+/// once 05:00 really passed.
+fn daily_due(
+    now: chrono::DateTime<chrono::Local>,
+    times: &[String],
+    last: Option<chrono::DateTime<chrono::Local>>,
+) -> bool {
+    times.iter().filter_map(|t| instance::parse_hhmm(t)).any(|mins| {
+        let Some(target) = now
+            .date_naive()
+            .and_hms_opt(mins / 60, mins % 60, 0)
+            .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
+        else {
+            return false;
+        };
+        let since = now.signed_duration_since(target).num_seconds();
+        (0..DAILY_GRACE_MINUTES * 60).contains(&since) && last.is_none_or(|l| l < target)
+    })
+}
+
 /// Runs forever: every 20s, restarts any running server whose schedule is
 /// due. Restarts go through `restart_instance` (countdown, cancelable).
 pub async fn run_scheduler(app: AppHandle) {
@@ -124,17 +146,7 @@ pub async fn run_scheduler(app: AppHandle) {
             let last = state.schedule_last_fired.lock().await.get(&inst.id).copied();
 
             let due = match schedule.mode {
-                RestartScheduleMode::Daily => schedule.times.iter().filter_map(|t| instance::parse_hhmm(t)).any(|mins| {
-                    let Some(target) = now
-                        .date_naive()
-                        .and_hms_opt(mins / 60, mins % 60, 0)
-                        .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
-                    else {
-                        return false;
-                    };
-                    let since = now.signed_duration_since(target).num_minutes();
-                    (0..DAILY_GRACE_MINUTES).contains(&since) && last.is_none_or(|l| l < target)
-                }),
+                RestartScheduleMode::Daily => daily_due(now, &schedule.times, last),
                 RestartScheduleMode::Interval => {
                     let Some(started) = commands::launch::instance_start_time(&state, &inst.id).await else {
                         continue;

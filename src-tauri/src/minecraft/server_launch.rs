@@ -37,11 +37,11 @@ pub enum ServerJvmTarget {
 /// same `instance-log`/`instance-running-changed`/`launch-progress` events
 /// `minecraft::launch::spawn_and_stream` emits for a client (both are
 /// already generic over instance id, so the frontend console needs no
-/// server-specific handling). The one real difference: stdin is piped and
-/// its handle kept open in `AppState.instance_stdins` rather than left at
-/// its default, so console commands - including a graceful `stop` (see
-/// `commands::launch::stop_instance`) - can be written to the running
-/// process later.
+/// server-specific handling). The one real difference: stdin is a FIFO
+/// (Unix, see `console_fifo`) or a pipe whose handle is kept open in
+/// `AppState.instance_stdins`, so console commands - including a graceful
+/// `stop` (see `commands::launch::stop_instance`) - can be written to the
+/// running process later.
 pub async fn spawn_and_stream_server(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -71,13 +71,29 @@ pub async fn spawn_and_stream_server(
     }
     cmd.arg("nogui");
     cmd.current_dir(cwd);
-    cmd.stdin(Stdio::piped());
+    // On Linux/macOS the console is a FIFO that survives Mint restarting
+    // (see `console_fifo`); a plain pipe if that can't be made.
+    #[cfg(unix)]
+    let fifo_path = super::console_fifo::path(&state.data_dir, instance_id);
+    #[cfg(unix)]
+    let fifo = super::console_fifo::create(&fifo_path).ok();
+    #[cfg(unix)]
+    let fifo_ino = fifo.as_ref().and_then(|f| f.metadata().ok()).map(|m| std::os::unix::fs::MetadataExt::ino(&m));
+    #[cfg(not(unix))]
+    let fifo: Option<std::fs::File> = None;
+    match fifo {
+        Some(file) => cmd.stdin(Stdio::from(file)),
+        None => cmd.stdin(Stdio::piped()),
+    };
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("failed to start Java ({}): {e}", java_path.display()))?;
+    // Mint's own copy of the FIFO must close now, or it would keep looking
+    // like a live console after the server exits.
+    drop(cmd);
 
     if let Some(stdin) = child.stdin.take() {
         state.instance_stdins.lock().await.insert(instance_id.to_string(), Arc::new(Mutex::new(stdin)));
@@ -135,6 +151,10 @@ pub async fn spawn_and_stream_server(
     let _ = err_task.await;
     state.running_instances.lock().await.remove(instance_id);
     state.instance_stdins.lock().await.remove(instance_id);
+    #[cfg(unix)]
+    if let Some(ino) = fifo_ino {
+        super::console_fifo::remove_if_same(&fifo_path, ino);
+    }
     state.persist_running_instances().await;
     let _ = app.emit(
         "instance-running-changed",

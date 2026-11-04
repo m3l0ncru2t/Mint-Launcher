@@ -1,6 +1,6 @@
 [package]
 name = "mint-launcher"
-version = "0.4.15"
+version = "0.4.16"
 description = "Mint Launcher - a custom Minecraft launcher"
 authors = ["you"]
 edition = "2021"
@@ -48,6 +48,9 @@ iroh = "1.2.0"
 png = "0.17"
 arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
 
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13"

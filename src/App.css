@@ -171,9 +171,9 @@ button {
   letter-spacing: 0.2px;
 }
 
-.donate-btn {
-  background: #ffdd57;
-  color: #3a2f00;
+.support-btn {
+  background: #5b2a86;
+  color: #efe4ff;
   border: none;
   border-radius: 6px;
   padding: 3px 9px;
@@ -183,8 +183,8 @@ button {
   white-space: nowrap;
 }
 
-.donate-btn:hover {
-  background: #ffd23f;
+.support-btn:hover {
+  background: #6d35a0;
 }
 
 .instance-list {
@@ -615,6 +615,22 @@ button {
   filter: none;
 }
 
+/* Same size as Play/Start, in blue so it doesn't read as a second Play. */
+.servers-btn {
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+  color: #04122e;
+  border: none;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 26px;
+  border-radius: 8px;
+  transition: filter 0.15s ease;
+}
+
+.servers-btn:hover {
+  filter: brightness(1.08);
+}
+
 .stop-btn {
   background: linear-gradient(135deg, #f87171, #b91c1c);
   color: #2a0605;
@@ -951,6 +967,29 @@ button {
 
 .progress-card-main {
   min-width: 0;
+}
+
+.client-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.client-session-head {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background-color: var(--bg-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mint-400);
+  flex-shrink: 0;
 }
 
 .server-resource-stats {

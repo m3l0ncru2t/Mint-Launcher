@@ -1,3 +1,6 @@
+#[cfg(unix)]
+pub mod console_fifo;
+pub mod client_activity;
 pub mod download;
 pub mod fabric;
 pub mod hash;

@@ -5,9 +5,10 @@ import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { InstanceFilesPanel } from "./InstanceFilesPanel";
 import { InstanceIcon } from "./InstanceIcon";
+import { PlayerAvatar } from "./PlayerAvatar";
 import { ServersDialog } from "./ServersDialog";
 import { nextScheduledRestart, ServerScheduleDialog } from "./ServerScheduleDialog";
-import type { Instance, LaunchProgressEvent, ProcessStats, TpsInfo } from "../types";
+import type { ClientActivity, Instance, LaunchProgressEvent, ProcessStats, RunningInstance, TpsInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import { useUptime } from "../lib/uptime";
 import { getPublicIpCached } from "../lib/publicIp";
@@ -96,11 +97,47 @@ function stageLabel(progress: LaunchProgressEvent | null, isServer: boolean): st
   return progress.stage;
 }
 
+/** "22:34" from a log line, in this computer's own clock format. */
+function logTime(hhmm: string | null): string | null {
+  const m = hhmm ? /^(\d{2}):(\d{2})$/.exec(hhmm) : null;
+  if (!m) return null;
+  const d = new Date();
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** One line for a running client's card: which server or world it's in. */
+function describeActivity(a: ClientActivity): string {
+  const server =
+    a.serverName && a.server && a.serverName.toLowerCase() !== a.server.toLowerCase()
+      ? `${a.serverName} (${a.server})`
+      : (a.serverName ?? a.server ?? "a server");
+  const at = logTime(a.since);
+  const reason = a.reason ? `: ${a.reason}` : "";
+  switch (a.state) {
+    case "joining":
+      return `Joining ${server}…`;
+    case "server":
+      // "joined", not "playing on": leaving a server on purpose isn't logged.
+      return `On ${server}${at ? ` · joined ${at}` : ""}`;
+    case "failed":
+      return `Couldn't join ${server}${reason}`;
+    case "disconnected":
+      return `Disconnected from ${server}${reason}${at ? ` · ${at}` : ""}`;
+    case "singleplayer":
+      return `Singleplayer · ${a.world ?? "a world"}${at ? ` · since ${at}` : ""}`;
+    default:
+      return "In the menus";
+  }
+}
+
 interface Props {
   instance: Instance;
   progress: LaunchProgressEvent | null;
   logLines: string[];
   pid: number | null;
+  /** The account a running client was launched with. */
+  running: RunningInstance | null;
   restartCountdown: number | null;
   showConfigsLogsTabs: boolean;
   spaciousView: boolean;
@@ -115,6 +152,7 @@ export function InstanceDetail({
   progress,
   logLines,
   pid,
+  running,
   restartCountdown,
   showConfigsLogsTabs,
   spaciousView,
@@ -158,9 +196,10 @@ export function InstanceDetail({
   const addresses = useServerAddresses(isServer ? instance.id : null);
   const nextRestart = isServer ? nextScheduledRestart(instance, stats?.startTime) : null;
   const uptime = useUptime(isServer && isRunning ? stats?.startTime : null);
+  const sessionTime = useUptime(!isServer && isRunning ? stats?.startTime : null);
 
   useEffect(() => {
-    if (!isServer || !isRunning || pid == null) {
+    if (!isRunning || pid == null) {
       setStats(null);
       return;
     }
@@ -178,6 +217,33 @@ export function InstanceDetail({
       stopInterval();
     };
   }, [isServer, isRunning, pid]);
+
+  const [activity, setActivity] = useState<ClientActivity | null>(null);
+
+  // Which server/world a client is in, read off its log - cheap, and it
+  // only changes when the player joins or leaves somewhere.
+  useEffect(() => {
+    if (isServer || !isRunning) {
+      setActivity(null);
+      return;
+    }
+    let cancelled = false;
+    function poll() {
+      api
+        .getClientActivity(instance.id)
+        .then((a) => !cancelled && setActivity(a))
+        .catch(() => !cancelled && setActivity(null));
+    }
+    poll();
+    const stopInterval = setVisibleInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      stopInterval();
+    };
+  }, [instance.id, isServer, isRunning]);
+  // Before the game has written anything this run, there's nothing to say yet.
+  const activityLine = activity && (activity.player || activity.state !== "menu") ? describeActivity(activity) : null;
+  const playerName = running?.accountUsername ?? activity?.player ?? null;
 
   const [tps, setTps] = useState<TpsInfo | null>(null);
 
@@ -460,7 +526,7 @@ export function InstanceDetail({
             </button>
           )}
           {!isServer && (
-            <button className="ghost-btn" onClick={() => setShowServers(true)}>
+            <button className="servers-btn" onClick={() => setShowServers(true)}>
               Servers{serverCount > 0 ? ` (${serverCount})` : ""}
             </button>
           )}
@@ -520,9 +586,30 @@ export function InstanceDetail({
             <div className="progress-card-row">
               <div className="progress-card-main">
                 <div className="stage">{stageLabel(progress, isServer)}</div>
-                <div>{progress?.message ?? (isServer ? "Server is running" : "Minecraft is running")}</div>
+                <div>
+                  {(isRunning ? activityLine : null) ??
+                    progress?.message ??
+                    (isServer ? "Server is running" : "Minecraft is running")}
+                </div>
+                {!isServer && isRunning && (playerName || sessionTime) && (
+                  <div className="client-session">
+                    {running?.accountUuid && playerName && (
+                      <PlayerAvatar
+                        uuid={running.accountUuid}
+                        username={playerName}
+                        size={18}
+                        className="client-session-head"
+                      />
+                    )}
+                    <span>
+                      {[playerName && `Playing as ${playerName}`, sessionTime && `session ${sessionTime}`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </div>
+                )}
               </div>
-              {isServer && isRunning && (stats || playerCount || tps) && (
+              {isRunning && (stats || playerCount || tps) && (
                 <div className="server-resource-stats">
                   <div className="server-resource-column">
                     {stats && (
