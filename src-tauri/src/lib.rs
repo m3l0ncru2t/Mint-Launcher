@@ -96,6 +96,7 @@ pub fn run() {
             commands::instances::delete_instance,
             commands::instances::get_instance,
             commands::instances::list_mods,
+            commands::instances::add_mod_file,
             commands::instances::delete_mod,
             commands::instances::get_mods_dir,
             commands::instances::open_folder,

@@ -70,6 +70,13 @@ export const api = {
 
   deleteMod: (id: string, fileName: string) => invoke<void>("delete_mod", { id, fileName }),
 
+  // Raw-body invoke: the jar's bytes go straight through, with the id/name
+  // in (ASCII-only, hence encoded) headers - see `add_mod_file`.
+  addModFile: async (id: string, file: File) =>
+    invoke<string>("add_mod_file", new Uint8Array(await file.arrayBuffer()), {
+      headers: { "x-instance-id": encodeURIComponent(id), "x-file-name": encodeURIComponent(file.name) },
+    }),
+
   toggleMod: (id: string, fileName: string, enabled: boolean) =>
     invoke<string>("toggle_mod", { id, fileName, enabled }),
 

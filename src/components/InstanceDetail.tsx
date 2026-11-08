@@ -510,9 +510,12 @@ export function InstanceDetail({
           )}
         </div>
         <div className="instance-header-actions">
-          <button className="danger-btn" onClick={() => onDelete(instance.id)}>
-            Delete
-          </button>
+          {/* Servers have Delete in the ⚙ instance settings dialog instead. */}
+          {!isServer && (
+            <button className="danger-btn" onClick={() => onDelete(instance.id)}>
+              Delete
+            </button>
+          )}
           <button className="ghost-btn" onClick={handleExport} disabled={exporting}>
             {exporting ? "Backing up…" : "Backup"}
           </button>

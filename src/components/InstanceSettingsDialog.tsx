@@ -8,6 +8,8 @@ interface Props {
   onClose: () => void;
   onSaved: (instance: Instance) => void;
   onIconChanged: (instance: Instance) => void;
+  /** Asks to delete the instance (App shows the confirmation). */
+  onDelete: (id: string) => void;
 }
 
 const DIFFICULTIES = ["peaceful", "easy", "normal", "hard"];
@@ -31,7 +33,7 @@ const SERVER_PROPERTY_DEFAULTS: Record<string, string> = {
   "spawn-protection": "16",
 };
 
-export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChanged }: Props) {
+export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChanged, onDelete }: Props) {
   const [name, setName] = useState(instance.name);
   const [memoryMb, setMemoryMb] = useState(instance.memoryMb);
   const [javaArgs, setJavaArgs] = useState(instance.javaArgs ?? "");
@@ -637,6 +639,21 @@ export function InstanceSettingsDialog({ instance, onClose, onSaved, onIconChang
             {duplicating ? "Copying…" : "Duplicate"}
           </button>
         </div>
+
+        {/* Servers keep Delete in here rather than in the header, where it
+            sat right beside Stop/Kill and was one misclick away. */}
+        {instance.kind === "server" && (
+          <div className="form-field">
+            <label>Delete server</label>
+            <div className="hint">
+              Permanently deletes this server, including its world, mods, and settings. Back up first if you want to
+              keep anything.
+            </div>
+            <button type="button" className="danger-btn small" onClick={() => onDelete(instance.id)}>
+              Delete server
+            </button>
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="ghost-btn" onClick={onClose}>

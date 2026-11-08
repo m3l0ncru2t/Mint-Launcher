@@ -8,6 +8,7 @@ import { ChatLine } from "./ChatPanel";
 import { ServerInfoPanel } from "./ServerInfoPanel";
 import { GroupedModList } from "./GroupedModList";
 import { filterMods } from "../lib/modSearch";
+import { useJarDrop } from "../hooks/useJarDrop";
 import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -589,6 +590,24 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
     }
   }
 
+  async function handleJarDrop(jars: File[], rejected: string[]) {
+    const problems: string[] = rejected.map((n) => `${n} isn't a .jar`);
+    setUploading(true);
+    setError(null);
+    for (const jar of jars) {
+      try {
+        await api.uploadMod(jar);
+      } catch (e) {
+        problems.push(`${jar.name}: ${e}`);
+      }
+    }
+    setUploading(false);
+    if (jars.length > 0) load();
+    if (problems.length > 0) setError(problems.join("\n"));
+  }
+
+  const drop = useJarDrop(handleJarDrop, uploading);
+
   async function handleDelete(fileName: string) {
     try {
       await api.deleteMod(fileName);
@@ -721,10 +740,13 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
           />
         </div>
       </div>
-      <div className="mods-list">
+      <div className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
+        {drop.active && <div className="file-drop-hint">Drop .jar files to upload them</div>}
         {loading && <div className="placeholder">Loading…</div>}
         {!loading && error && <div className="error-text">{error}</div>}
-        {!loading && !error && mods.length === 0 && <div className="placeholder">No mods installed.</div>}
+        {!loading && !error && mods.length === 0 && (
+          <div className="placeholder">No mods installed. Drag .jar files here to upload them.</div>
+        )}
         {!loading && !error && search.trim() !== "" && filterMods(mods, updates, search).length === 0 && (
           <div className="placeholder">No mods match "{search.trim()}".</div>
         )}

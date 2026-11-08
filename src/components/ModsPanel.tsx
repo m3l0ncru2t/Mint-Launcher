@@ -8,6 +8,7 @@ import type { ModFile, ModUpdateInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import { GroupedModList } from "./GroupedModList";
 import { filterMods } from "../lib/modSearch";
+import { useJarDrop } from "../hooks/useJarDrop";
 
 interface Props {
   instanceId: string;
@@ -34,6 +35,24 @@ export function ModsPanel({ instanceId }: Props) {
 
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState<string | null>(null);
+
+  async function handleJarDrop(jars: File[], rejected: string[]) {
+    const problems: string[] = rejected.map((n) => `${n} isn't a .jar`);
+    for (let i = 0; i < jars.length; i++) {
+      setAdding(jars.length === 1 ? `Adding ${jars[0].name}…` : `Adding mods… (${i + 1}/${jars.length})`);
+      try {
+        await api.addModFile(instanceId, jars[i]);
+      } catch (e) {
+        problems.push(`${jars[i].name}: ${e}`);
+      }
+    }
+    setAdding(null);
+    if (jars.length > 0) load(false, true);
+    if (problems.length > 0) setError(problems.join("\n"));
+  }
+
+  const drop = useJarDrop(handleJarDrop, adding !== null);
 
   function load(showLoading: boolean, thenCheckUpdates: boolean) {
     if (loadingRef.current) {
@@ -294,12 +313,14 @@ export function ModsPanel({ instanceId }: Props) {
           </button>
         </div>
       </div>
-      <div className="mods-list">
+      <div className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
+        {drop.active && <div className="file-drop-hint">Drop .jar files to add them</div>}
+        {adding && <div className="placeholder">{adding}</div>}
         {loading && <div className="placeholder">Loading…</div>}
         {!loading && error && <div className="error-text">{error}</div>}
         {!loading && !error && mods.length === 0 && (
           <div className="placeholder">
-            No mods installed. Drop .jar files into the mods folder - the list updates on its own.
+            No mods installed. Drag .jar files here, or drop them into the mods folder - the list updates on its own.
           </div>
         )}
         {!loading && !error && search.trim() !== "" && filterMods(mods, updates, search).length === 0 && (

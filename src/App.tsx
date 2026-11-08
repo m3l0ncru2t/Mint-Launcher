@@ -401,6 +401,10 @@ export default function App() {
         <InstanceSettingsDialog
           instance={instanceSettingsFor}
           onClose={() => setInstanceSettingsFor(null)}
+          onDelete={(id) => {
+            setInstanceSettingsFor(null);
+            setConfirmDeleteId(id);
+          }}
           onSaved={(updated) => {
             const previous = instanceSettingsFor;
             setInstanceSettingsFor(null);

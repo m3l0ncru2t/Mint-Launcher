@@ -794,6 +794,37 @@ button {
   padding: 6px;
 }
 
+/* Dragging .jar files from the file manager onto the list (useJarDrop). */
+.mods-list {
+  position: relative;
+}
+
+.mods-list.file-drop-active {
+  outline: 2px dashed var(--mint-400);
+  outline-offset: -4px;
+  border-radius: 8px;
+  background: rgb(52 211 153 / 0.08);
+}
+
+.file-drop-hint {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 6px auto;
+  width: fit-content;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--mint-600);
+  color: var(--mint-50);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.mods-list .error-text {
+  white-space: pre-line;
+}
+
 .mods-list .placeholder {
   color: var(--text-2);
   font-size: 12px;

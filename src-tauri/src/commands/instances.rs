@@ -209,6 +209,67 @@ pub fn list_mods(state: State<AppState>, id: String) -> Result<Vec<ModFile>, Str
     Ok(mods)
 }
 
+/// Same ceiling the remote API puts on an uploaded jar.
+const MAX_DROPPED_MOD_BYTES: usize = 300 * 1024 * 1024;
+
+/// Reverses the frontend's `encodeURIComponent` - IPC headers must be plain
+/// ASCII, so the instance id and file name travel percent-encoded.
+fn percent_decode(s: &str) -> Result<String, String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3).ok_or("Bad header encoding")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "Bad header encoding")?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "Bad header encoding".to_string())
+}
+
+/// Writes a .jar dragged onto the Mods list into the instance's mods folder.
+/// The file bytes come as the raw IPC body (no base64/JSON round-trip for a
+/// multi-MB jar); the instance id and file name ride along as headers.
+/// Returns the file name it was saved under.
+#[tauri::command]
+pub async fn add_mod_file(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let header = |name: &str| -> Result<String, String> {
+        let raw = request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| format!("Missing {name} header"))?;
+        percent_decode(raw)
+    };
+    let id = header("x-instance-id")?;
+    let file_name = header("x-file-name")?;
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("Expected the file contents as raw bytes".to_string());
+    };
+    if !file_name.to_lowercase().ends_with(".jar") {
+        return Err(format!("{file_name} isn't a .jar file"));
+    }
+    if data.len() > MAX_DROPPED_MOD_BYTES {
+        return Err(format!("{file_name} is too large"));
+    }
+    let dir = resolve_mods_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = safe_child(&dir, &file_name)?;
+    // Written to a temp name and renamed in, so a half-written jar never
+    // shows up in the list (it refreshes on a 5s timer) or gets loaded.
+    let tmp = dir.join(format!(".{file_name}.part"));
+    tokio::fs::write(&tmp, data).await.map_err(|e| e.to_string())?;
+    if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e.to_string());
+    }
+    Ok(file_name)
+}
+
 #[tauri::command]
 pub fn delete_mod(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
     let dir = resolve_mods_dir(&state, &id)?;
