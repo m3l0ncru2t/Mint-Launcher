@@ -1,0 +1,14 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Mint Launcher",
+        "width": 980,
+        "height": 580,
+        "minWidth": 640,
+        "minHeight": 420,
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}

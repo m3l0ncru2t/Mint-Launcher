@@ -15,6 +15,7 @@ import type {
   Instance,
   InstalledModInfo,
   InstallSummary,
+  ModVersionInfo,
   LogEntry,
   ModDetails,
   ModFile,
@@ -77,6 +78,11 @@ export const api = {
       headers: { "x-instance-id": encodeURIComponent(id), "x-file-name": encodeURIComponent(file.name) },
     }),
 
+  // Linux file drops arrive as paths (Tauri's native drop), not File objects - see `add_mod_path`.
+  addModPath: (id: string, path: string) => invoke<string>("add_mod_path", { id, path }),
+
+  readDroppedJar: (path: string) => invoke<ArrayBuffer>("read_dropped_jar", { path }),
+
   toggleMod: (id: string, fileName: string, enabled: boolean) =>
     invoke<string>("toggle_mod", { id, fileName, enabled }),
 
@@ -138,8 +144,12 @@ export const api = {
   searchMods: (id: string, query: string, offset: number) =>
     invoke<ModSearchPage>("search_mods", { id, query, offset }),
 
-  installMod: (id: string, projectId: string) =>
-    invoke<InstallSummary>("install_mod", { id, projectId }),
+  // versionId: a specific version (or the one to switch to); omitted = latest compatible.
+  installMod: (id: string, projectId: string, versionId?: string) =>
+    invoke<InstallSummary>("install_mod", { id, projectId, versionId: versionId ?? null }),
+
+  listModVersions: (id: string, projectId: string, allGameVersions: boolean) =>
+    invoke<ModVersionInfo[]>("list_mod_versions", { id, projectId, allGameVersions }),
 
   getModInfo: (id: string, fileName: string) =>
     invoke<ModDetails>("get_mod_info", { id, fileName }),

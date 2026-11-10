@@ -8,7 +8,8 @@ import { ChatLine } from "./ChatPanel";
 import { ServerInfoPanel } from "./ServerInfoPanel";
 import { GroupedModList } from "./GroupedModList";
 import { filterMods } from "../lib/modSearch";
-import { useJarDrop } from "../hooks/useJarDrop";
+import { useJarDrop, type DroppedJar } from "../hooks/useJarDrop";
+import { api as localApi } from "../api";
 import { showFullTextIfTruncated } from "../lib/truncationTooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PlayerAvatar } from "./PlayerAvatar";
@@ -590,13 +591,15 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
     }
   }
 
-  async function handleJarDrop(jars: File[], rejected: string[]) {
+  async function handleJarDrop(jars: DroppedJar[], rejected: string[]) {
     const problems: string[] = rejected.map((n) => `${n} isn't a .jar`);
     setUploading(true);
     setError(null);
     for (const jar of jars) {
       try {
-        await api.uploadMod(jar);
+        // Linux drops give a path; read it locally so it can be uploaded like a picked file
+        const file = jar.file ?? new File([await localApi.readDroppedJar(jar.path!)], jar.name);
+        await api.uploadMod(file);
       } catch (e) {
         problems.push(`${jar.name}: ${e}`);
       }
@@ -740,7 +743,7 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
           />
         </div>
       </div>
-      <div className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
+      <div ref={drop.ref} className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
         {drop.active && <div className="file-drop-hint">Drop .jar files to upload them</div>}
         {loading && <div className="placeholder">Loading…</div>}
         {!loading && error && <div className="error-text">{error}</div>}

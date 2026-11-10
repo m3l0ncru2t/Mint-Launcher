@@ -9,6 +9,8 @@ interface Props {
   installing: boolean;
   installedMsg?: string;
   onInstall: (projectId: string) => void;
+  /** Opens the version list, to install (or switch to) a specific version instead of the latest. */
+  onChooseVersion?: () => void;
   onClose: () => void;
 }
 
@@ -26,7 +28,7 @@ function sideLabel(side: string): string | null {
   return side;
 }
 
-export function ModProjectInfoDialog({ instanceId, result, installing, installedMsg, onInstall, onClose }: Props) {
+export function ModProjectInfoDialog({ instanceId, result, installing, installedMsg, onInstall, onChooseVersion, onClose }: Props) {
   const [details, setDetails] = useState<ModProjectDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,6 +109,11 @@ export function ModProjectInfoDialog({ instanceId, result, installing, installed
           <button className="ghost-btn" onClick={() => openUrl(details?.projectUrl ?? `https://modrinth.com/mod/${result.slug}`)}>
             View on Modrinth
           </button>
+          {onChooseVersion && (
+            <button className="ghost-btn" onClick={onChooseVersion}>
+              Choose version…
+            </button>
+          )}
           <button
             className="primary-btn"
             disabled={installing || alreadyInstalled}

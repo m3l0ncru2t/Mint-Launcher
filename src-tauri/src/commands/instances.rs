@@ -270,6 +270,59 @@ pub async fn add_mod_file(state: State<'_, AppState>, request: tauri::ipc::Reque
     Ok(file_name)
 }
 
+/// The checks every dropped-file path goes through: a `.jar`, an existing regular file, not over the size cap.
+/// Returns its file name and size.
+fn check_dropped_jar(path: &std::path::Path) -> Result<(String, u64), String> {
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| "Invalid file".to_string())?;
+    if !file_name.to_lowercase().ends_with(".jar") {
+        return Err(format!("{file_name} isn't a .jar file"));
+    }
+    let meta = std::fs::metadata(path).map_err(|e| format!("{file_name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{file_name} isn't a file"));
+    }
+    if meta.len() > MAX_DROPPED_MOD_BYTES as u64 {
+        return Err(format!("{file_name} is too large"));
+    }
+    Ok((file_name, meta.len()))
+}
+
+/// Copies a .jar dropped onto the Mods list into the instance's mods folder, by its path. Linux delivers file
+/// drops this way (Tauri's native drop, which knows the real path) - WebKitGTK gives the page neither the file
+/// nor its address. Same temp-then-rename as `add_mod_file`. Returns the saved file name.
+#[tauri::command]
+pub async fn add_mod_path(state: State<'_, AppState>, id: String, path: String) -> Result<String, String> {
+    let source = std::path::PathBuf::from(&path);
+    let (file_name, _) = check_dropped_jar(&source)?;
+    let dir = resolve_mods_dir(&state, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = safe_child(&dir, &file_name)?;
+    if source.canonicalize().ok() == dest.canonicalize().ok() {
+        // Dragged out of this very mods folder and back in
+        return Ok(file_name);
+    }
+    let tmp = dir.join(format!(".{file_name}.part"));
+    tokio::fs::copy(&source, &tmp).await.map_err(|e| e.to_string())?;
+    if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e.to_string());
+    }
+    Ok(file_name)
+}
+
+/// The bytes of a .jar dropped onto a remote server's Mods list, so the page can upload it - on Linux the drop
+/// only gives a path (see `add_mod_path`). Limited to the same checks, so it can't be used to read other files.
+#[tauri::command]
+pub async fn read_dropped_jar(path: String) -> Result<tauri::ipc::Response, String> {
+    let source = std::path::PathBuf::from(&path);
+    check_dropped_jar(&source)?;
+    let data = tokio::fs::read(&source).await.map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(data))
+}
+
 #[tauri::command]
 pub fn delete_mod(state: State<AppState>, id: String, file_name: String) -> Result<(), String> {
     let dir = resolve_mods_dir(&state, &id)?;
@@ -1080,11 +1133,14 @@ pub async fn apply_shaderpack_update(
     Ok(())
 }
 
+/// `version_id`: a specific version to install (or switch to) instead of the latest compatible one.
+/// Optional, so callers that only pass a project keep working.
 #[tauri::command]
 pub async fn install_mod(
     state: State<'_, AppState>,
     id: String,
     project_id: String,
+    version_id: Option<String>,
 ) -> Result<crate::minecraft::modrinth::InstallSummary, String> {
     let inst = resolve_instance(&state, &id)?;
     let dir = inst.mods_dir(&state.instances_dir());
@@ -1094,6 +1150,30 @@ pub async fn install_mod(
         &inst.version_id,
         inst.loader.modrinth_loader(),
         &project_id,
+        version_id.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A mod's versions for this instance's loader, newest first - just the ones for its Minecraft version
+/// unless `all_game_versions`.
+#[tauri::command]
+pub async fn list_mod_versions(
+    state: State<'_, AppState>,
+    id: String,
+    project_id: String,
+    all_game_versions: bool,
+) -> Result<Vec<crate::minecraft::modrinth::ModVersionInfo>, String> {
+    let inst = resolve_instance(&state, &id)?;
+    let dir = inst.mods_dir(&state.instances_dir());
+    crate::minecraft::modrinth::list_project_versions(
+        &state.http,
+        &project_id,
+        &inst.version_id,
+        inst.loader.modrinth_loader(),
+        all_game_versions,
+        &dir,
     )
     .await
     .map_err(|e| e.to_string())

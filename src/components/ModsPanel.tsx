@@ -8,7 +8,7 @@ import type { ModFile, ModUpdateInfo } from "../types";
 import { setVisibleInterval } from "../lib/visibleInterval";
 import { GroupedModList } from "./GroupedModList";
 import { filterMods } from "../lib/modSearch";
-import { useJarDrop } from "../hooks/useJarDrop";
+import { useJarDrop, type DroppedJar } from "../hooks/useJarDrop";
 
 interface Props {
   instanceId: string;
@@ -37,12 +37,13 @@ export function ModsPanel({ instanceId }: Props) {
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState<string | null>(null);
 
-  async function handleJarDrop(jars: File[], rejected: string[]) {
+  async function handleJarDrop(jars: DroppedJar[], rejected: string[]) {
     const problems: string[] = rejected.map((n) => `${n} isn't a .jar`);
     for (let i = 0; i < jars.length; i++) {
       setAdding(jars.length === 1 ? `Adding ${jars[0].name}…` : `Adding mods… (${i + 1}/${jars.length})`);
       try {
-        await api.addModFile(instanceId, jars[i]);
+        const jar = jars[i];
+        await (jar.path ? api.addModPath(instanceId, jar.path) : api.addModFile(instanceId, jar.file!));
       } catch (e) {
         problems.push(`${jars[i].name}: ${e}`);
       }
@@ -313,7 +314,7 @@ export function ModsPanel({ instanceId }: Props) {
           </button>
         </div>
       </div>
-      <div className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
+      <div ref={drop.ref} className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
         {drop.active && <div className="file-drop-hint">Drop .jar files to add them</div>}
         {adding && <div className="placeholder">{adding}</div>}
         {loading && <div className="placeholder">Loading…</div>}

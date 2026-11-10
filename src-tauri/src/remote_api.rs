@@ -41,6 +41,7 @@ fn build_router(app: AppHandle) -> Router {
         .route("/mods/updates/apply", post(apply_mod_update))
         .route("/mods/search", get(search_mods))
         .route("/mods/install", post(install_mod))
+        .route("/mods/versions", get(list_mod_versions))
         .route("/resourcepacks", get(list_resourcepacks).post(upload_resourcepack).layer(upload_body_limit()))
         .route("/resourcepacks/{file_name}", delete(delete_resourcepack))
         .route("/resourcepacks/{file_name}/toggle", post(toggle_resourcepack))
@@ -399,6 +400,32 @@ async fn search_mods(
 #[serde(rename_all = "camelCase")]
 struct InstallRequest {
     project_id: String,
+    // Older clients don't send it: latest compatible version, as before.
+    #[serde(default)]
+    version_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VersionsParams {
+    project_id: String,
+    #[serde(default)]
+    all: bool,
+}
+
+/// A mod's versions for the shared instance - lets a remote admin pick one to install.
+async fn list_mod_versions(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Query(params): Query<VersionsParams>,
+) -> Result<Json<Vec<crate::minecraft::modrinth::ModVersionInfo>>, ApiError> {
+    require_session(&app, &headers).await?;
+    let (_, id) = shared_instance(&app).await?;
+    let state = app.state::<AppState>();
+    commands::instances::list_mod_versions(state, id, params.project_id, params.all)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
 async fn install_mod(
@@ -407,10 +434,13 @@ async fn install_mod(
     Json(body): Json<InstallRequest>,
 ) -> Result<Json<crate::minecraft::modrinth::InstallSummary>, ApiError> {
     let session = require_session(&app, &headers).await?;
-    let audit_detail: String = format!("Modrinth project {}", body.project_id);
+    let audit_detail: String = match &body.version_id {
+        Some(v) => format!("Modrinth project {} (version {v})", body.project_id),
+        None => format!("Modrinth project {}", body.project_id),
+    };
     let (_, id) = shared_instance(&app).await?;
     let state = app.state::<AppState>();
-    let result = commands::instances::install_mod(state, id, body.project_id.clone())
+    let result = commands::instances::install_mod(state, id, body.project_id.clone(), body.version_id.clone())
         .await
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;

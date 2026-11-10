@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { remoteApi } from "../remoteApi";
+import { ModVersionsDialog } from "./ModVersionsDialog";
 import type { ModSearchResult, RemoteServerLink } from "../types";
 
 interface Props {
@@ -28,6 +29,7 @@ export function RemoteBrowseModsDialog({ link, onTokenRefreshed, onClose, onInst
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
   const [installedMsg, setInstalledMsg] = useState<Record<string, string>>({});
+  const [versionsFor, setVersionsFor] = useState<ModSearchResult | null>(null);
   const loadingMoreRef = useRef(false);
 
   useEffect(() => {
@@ -132,19 +134,37 @@ export function RemoteBrowseModsDialog({ link, onTokenRefreshed, onClose, onInst
                       <div className={`mod-search-installed${outdated ? " outdated" : ""}`}>{statusText}</div>
                     )}
                   </div>
-                  <button
-                    className="primary-btn small"
-                    disabled={installing === r.projectId || alreadyInstalled}
-                    onClick={() => handleInstall(r.projectId)}
-                  >
-                    {alreadyInstalled ? "Installed" : installing === r.projectId ? "Installing…" : "Install"}
-                  </button>
+                  <div className="mod-search-actions">
+                    <button
+                      className="primary-btn small"
+                      disabled={installing === r.projectId || alreadyInstalled}
+                      onClick={() => handleInstall(r.projectId)}
+                    >
+                      {alreadyInstalled ? "Installed" : installing === r.projectId ? "Installing…" : "Install"}
+                    </button>
+                    <button className="ghost-btn small" title="Pick which version to install" onClick={() => setVersionsFor(r)}>
+                      Versions
+                    </button>
+                  </div>
                 </div>
               );
             })}
           {!loading && loadingMore && <div className="placeholder">Loading more…</div>}
         </div>
       </div>
+
+      {versionsFor && (
+        <ModVersionsDialog
+          title={versionsFor.title}
+          loadVersions={(all) => api.listModVersions(versionsFor.projectId, all)}
+          installVersion={(versionId) => api.installMod(versionsFor.projectId, versionId)}
+          onInstalled={(message) => {
+            setInstalledMsg((prev) => ({ ...prev, [versionsFor.projectId]: message }));
+            onInstalled();
+          }}
+          onClose={() => setVersionsFor(null)}
+        />
+      )}
     </div>
   );
 }

@@ -20,6 +20,35 @@ struct ModrinthVersion {
     files: Vec<ModrinthFile>,
     #[serde(default)]
     dependencies: Vec<ModrinthDependency>,
+    // Only needed for the version picker; defaulted so every other lookup is unaffected.
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version_type: String,
+    #[serde(default)]
+    date_published: String,
+    #[serde(default)]
+    game_versions: Vec<String>,
+    #[serde(default)]
+    loaders: Vec<String>,
+}
+
+/// One version of a Modrinth project, for picking which to install instead of always the latest.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModVersionInfo {
+    pub id: String,
+    pub version_number: String,
+    pub name: String,
+    /// "release", "beta" or "alpha"
+    pub version_type: String,
+    pub date_published: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    /// Built for this instance's Minecraft version (always true unless all versions were asked for).
+    pub compatible: bool,
+    /// This exact version is what's in the mods folder now.
+    pub installed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -406,7 +435,7 @@ pub async fn apply_update(
     Ok(new_file_name.to_string())
 }
 
-/// Like `installed_project_ids`/`installed_resourcepack_project_ids`, but
+/// Like `installed_files_by_project`/`installed_resourcepack_project_ids`, but
 /// keyed by project id and keeping the matched version itself (not just its
 /// id) - `search_projects` needs the version id to tell whether an
 /// already-installed project's file is still the latest compatible version.
@@ -633,26 +662,38 @@ async fn fetch_version_by_id(client: &reqwest::Client, version_id: &str) -> anyh
     Ok(resp.json().await?)
 }
 
-/// The set of Modrinth project ids already present in `mods_dir`, identified
-/// by hash - used to avoid re-installing a mod or one of its dependencies.
-async fn installed_project_ids(client: &reqwest::Client, mods_dir: &Path) -> anyhow::Result<HashSet<String>> {
-    let mut hashes = Vec::new();
+/// A file in the mods folder that Modrinth recognised, by hash.
+#[derive(Debug, Clone)]
+struct InstalledFile {
+    version_id: String,
+    file_name: String,
+}
+
+/// The mods folder's files Modrinth recognises, grouped by project - which version each is, and its file
+/// name (including a `.disabled` suffix), so installing another version knows what to replace.
+async fn installed_files_by_project(
+    client: &reqwest::Client,
+    mods_dir: &Path,
+) -> anyhow::Result<HashMap<String, Vec<InstalledFile>>> {
+    let mut name_by_hash: HashMap<String, String> = HashMap::new();
     if mods_dir.exists() {
         for entry in std::fs::read_dir(mods_dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_file() {
                 continue;
             }
-            let lower = entry.file_name().to_string_lossy().to_lowercase();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
             if lower.ends_with(".jar") || lower.ends_with(".jar.disabled") {
-                hashes.push(sha1_hex_file(&entry.path())?);
+                name_by_hash.insert(sha1_hex_file(&entry.path())?, name);
             }
         }
     }
-    if hashes.is_empty() {
-        return Ok(HashSet::new());
+    if name_by_hash.is_empty() {
+        return Ok(HashMap::new());
     }
 
+    let hashes: Vec<&String> = name_by_hash.keys().collect();
     let body = serde_json::json!({ "hashes": hashes, "algorithm": "sha1" });
     let resp = client
         .post(format!("{MODRINTH_BASE}/version_files"))
@@ -661,21 +702,88 @@ async fn installed_project_ids(client: &reqwest::Client, mods_dir: &Path) -> any
         .await?;
     let resp = ensure_success(resp, "Looking up installed mods on Modrinth").await?;
     let matched: HashMap<String, ModrinthVersion> = resp.json().await?;
-    Ok(matched.into_values().map(|v| v.project_id).collect())
+    let mut by_project: HashMap<String, Vec<InstalledFile>> = HashMap::new();
+    for (hash, version) in matched {
+        if let Some(file_name) = name_by_hash.get(&hash) {
+            by_project.entry(version.project_id).or_default().push(InstalledFile {
+                version_id: version.id,
+                file_name: file_name.clone(),
+            });
+        }
+    }
+    Ok(by_project)
+}
+
+/// Every version of a project for this instance's loader, newest first - only the ones built for its
+/// Minecraft version unless `all_game_versions`. Marks which (if any) is installed now.
+pub async fn list_project_versions(
+    client: &reqwest::Client,
+    project_id: &str,
+    game_version: &str,
+    loader: Option<&str>,
+    all_game_versions: bool,
+    mods_dir: &Path,
+) -> anyhow::Result<Vec<ModVersionInfo>> {
+    let game_versions_param = format!("[\"{game_version}\"]");
+    let loaders_param = loader.map(|l| format!("[\"{l}\"]"));
+    let mut query = vec![("include_changelog", "false")];
+    if !all_game_versions {
+        query.push(("game_versions", game_versions_param.as_str()));
+    }
+    if let Some(p) = &loaders_param {
+        query.push(("loaders", p.as_str()));
+    }
+    let resp = client
+        .get(format!("{MODRINTH_BASE}/project/{project_id}/version"))
+        .query(&query)
+        .send()
+        .await?;
+    let resp = ensure_success(resp, "Listing mod versions").await?;
+    let versions: Vec<ModrinthVersion> = resp.json().await?;
+
+    // Not knowing what's installed only loses the "Installed" marker, so don't fail the list over it.
+    let installed: HashSet<String> = installed_files_by_project(client, mods_dir)
+        .await
+        .ok()
+        .and_then(|mut m| m.remove(project_id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| f.version_id)
+        .collect();
+
+    Ok(versions
+        .into_iter()
+        .map(|v| ModVersionInfo {
+            compatible: v.game_versions.iter().any(|g| g == game_version),
+            installed: installed.contains(&v.id),
+            id: v.id,
+            version_number: v.version_number,
+            name: v.name,
+            version_type: v.version_type,
+            date_published: v.date_published,
+            game_versions: v.game_versions,
+            loaders: v.loaders,
+        })
+        .collect())
 }
 
 /// Installs a mod and, recursively, any of its "required" dependencies that
 /// aren't already present - the same way Modrinth's own app does it.
+///
+/// `version_id` picks a specific version of the mod itself (dependencies still get their latest compatible
+/// version). When another version of it is already installed, that one is replaced - keeping it disabled if
+/// it was - rather than reported as already installed.
 pub async fn install_mod(
     client: &reqwest::Client,
     mods_dir: &Path,
     game_version: &str,
     loader: Option<&str>,
     project_id: &str,
+    version_id: Option<&str>,
 ) -> anyhow::Result<InstallSummary> {
     std::fs::create_dir_all(mods_dir)?;
 
-    let already_present = installed_project_ids(client, mods_dir).await?;
+    let present = installed_files_by_project(client, mods_dir).await?;
     let mut meta = mod_meta::load(mods_dir);
 
     let mut installed = Vec::new();
@@ -687,7 +795,10 @@ pub async fn install_mod(
         if !visited.insert(pid.clone()) {
             continue;
         }
-        if already_present.contains(&pid) {
+        let pinned = if pid == project_id { version_id } else { None };
+        let existing = present.get(&pid).cloned().unwrap_or_default();
+        // Already there: done, unless a specific, different version of the mod itself was asked for
+        if !existing.is_empty() && pinned.is_none_or(|v| existing.iter().any(|f| f.version_id == v)) {
             let title = fetch_project_info(client, &pid)
                 .await
                 .map(|p| p.title)
@@ -696,11 +807,20 @@ pub async fn install_mod(
             continue;
         }
 
-        let version = fetch_latest_compatible(client, &pid, game_version, loader)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("No version of this mod is compatible with this Minecraft version/loader")
-            })?;
+        let version = match pinned {
+            Some(vid) => {
+                let v = fetch_version_by_id(client, vid).await?;
+                if v.project_id != pid {
+                    anyhow::bail!("That version belongs to a different mod");
+                }
+                v
+            }
+            None => fetch_latest_compatible(client, &pid, game_version, loader)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("No version of this mod is compatible with this Minecraft version/loader")
+                })?,
+        };
 
         let file = version
             .files
@@ -708,14 +828,28 @@ pub async fn install_mod(
             .find(|f| f.primary)
             .or(version.files.first())
             .ok_or_else(|| anyhow::anyhow!("This mod has no downloadable file"))?;
+        // The name comes from Modrinth; refuse anything that would land outside the mods folder.
+        if file.filename.contains('/') || file.filename.contains('\\') || file.filename.starts_with('.') {
+            anyhow::bail!("Modrinth returned an unexpected file name: {}", file.filename);
+        }
 
         let resp = client.get(&file.url).send().await?;
         let resp = ensure_success(resp, "Downloading mod").await?;
         let bytes = resp.bytes().await?;
-        std::fs::write(mods_dir.join(&file.filename), &bytes)?;
+
+        // Switching versions keeps the mod's enabled/disabled state
+        let disabled = !existing.is_empty() && existing.iter().all(|f| f.file_name.to_lowercase().ends_with(".disabled"));
+        let new_name = if disabled { format!("{}.disabled", file.filename) } else { file.filename.clone() };
+        std::fs::write(mods_dir.join(&new_name), &bytes)?;
+        for old in &existing {
+            if old.file_name != new_name {
+                let _ = std::fs::remove_file(mods_dir.join(&old.file_name));
+                meta.remove(&old.file_name);
+            }
+        }
 
         meta.insert(
-            file.filename.clone(),
+            new_name.clone(),
             ModMeta {
                 project_id: pid.clone(),
                 is_dependency: pid != project_id,
@@ -729,7 +863,7 @@ pub async fn install_mod(
         installed.push(InstalledModInfo {
             project_id: pid,
             title,
-            file_name: file.filename.clone(),
+            file_name: new_name,
         });
 
         for dep in &version.dependencies {
@@ -756,7 +890,7 @@ pub async fn install_mod(
 
 /// The set of Modrinth project ids already present as `.zip`s in a pack
 /// folder (resource packs or shader packs), identified by hash - same
-/// approach as `installed_project_ids`, but packs have no ".disabled"
+/// approach as `installed_files_by_project`, but packs have no ".disabled"
 /// convention to also match.
 async fn installed_resourcepack_project_ids(
     client: &reqwest::Client,

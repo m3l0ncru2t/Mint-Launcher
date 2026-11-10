@@ -4,6 +4,7 @@ import type {
   BannedPlayerEntry,
   InstalledModInfo,
   InstallSummary,
+  ModVersionInfo,
   ModFile,
   ModSearchPage,
   ModUpdateInfo,
@@ -81,12 +82,19 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
         (r) => r.json() as Promise<ModSearchPage>,
       ),
 
-    installMod: (projectId: string) =>
+    // versionId is ignored by hosts on an older Mint, which install the latest instead - the versions
+    // list itself 404s there, so the picker never offers one.
+    installMod: (projectId: string, versionId?: string) =>
       request("/mods/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify(versionId ? { projectId, versionId } : { projectId }),
       }).then((r) => r.json() as Promise<InstallSummary>),
+
+    listModVersions: (projectId: string, all: boolean) =>
+      request(`/mods/versions?projectId=${encodeURIComponent(projectId)}&all=${all}`).then(
+        (r) => r.json() as Promise<ModVersionInfo[]>,
+      ),
 
     checkModUpdates: () => request("/mods/updates").then((r) => r.json() as Promise<ModUpdateInfo[]>),
 

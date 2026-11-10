@@ -340,6 +340,19 @@ export interface InstalledModInfo {
   fileName: string;
 }
 
+/** One version of a Modrinth project (see `modrinth::ModVersionInfo`). */
+export interface ModVersionInfo {
+  id: string;
+  versionNumber: string;
+  name: string;
+  versionType: string;
+  datePublished: string;
+  gameVersions: string[];
+  loaders: string[];
+  compatible: boolean;
+  installed: boolean;
+}
+
 export interface InstallSummary {
   installed: InstalledModInfo[];
   alreadyInstalled: string[];

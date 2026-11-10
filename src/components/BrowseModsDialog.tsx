@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { ModProjectInfoDialog } from "./ModProjectInfoDialog";
+import { ModVersionsDialog } from "./ModVersionsDialog";
 import type { ModSearchResult } from "../types";
 
 interface Props {
@@ -25,7 +26,17 @@ export function BrowseModsDialog({ instanceId, onClose, onInstalled }: Props) {
   const [installing, setInstalling] = useState<string | null>(null);
   const [installedMsg, setInstalledMsg] = useState<Record<string, string>>({});
   const [infoResult, setInfoResult] = useState<ModSearchResult | null>(null);
+  // The mod whose version list is open (picking a specific version to install / switch to)
+  const [versionsFor, setVersionsFor] = useState<ModSearchResult | null>(null);
+  const [gameVersion, setGameVersion] = useState<string | undefined>(undefined);
   const loadingMoreRef = useRef(false);
+
+  useEffect(() => {
+    api
+      .getInstance(instanceId)
+      .then((inst) => setGameVersion(inst?.versionId))
+      .catch(() => {});
+  }, [instanceId]);
 
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -126,16 +137,29 @@ export function BrowseModsDialog({ instanceId, onClose, onInstalled }: Props) {
                       <div className={`mod-search-installed${outdated ? " outdated" : ""}`}>{statusText}</div>
                     )}
                   </div>
-                  <button
-                    className="primary-btn small"
-                    disabled={installing === r.projectId || alreadyInstalled}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleInstall(r.projectId);
-                    }}
-                  >
-                    {alreadyInstalled ? "Installed" : installing === r.projectId ? "Installing…" : "Install"}
-                  </button>
+                  <div className="mod-search-actions">
+                    <button
+                      className="primary-btn small"
+                      disabled={installing === r.projectId || alreadyInstalled}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleInstall(r.projectId);
+                      }}
+                    >
+                      {alreadyInstalled ? "Installed" : installing === r.projectId ? "Installing…" : "Install"}
+                    </button>
+                    {/* Stays enabled once installed, to switch to another version */}
+                    <button
+                      className="ghost-btn small"
+                      title="Pick which version to install"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setVersionsFor(r);
+                      }}
+                    >
+                      Versions
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -150,7 +174,22 @@ export function BrowseModsDialog({ instanceId, onClose, onInstalled }: Props) {
           installing={installing === infoResult.projectId}
           installedMsg={installedMsg[infoResult.projectId]}
           onInstall={handleInstall}
+          onChooseVersion={() => setVersionsFor(infoResult)}
           onClose={() => setInfoResult(null)}
+        />
+      )}
+
+      {versionsFor && (
+        <ModVersionsDialog
+          title={versionsFor.title}
+          gameVersionLabel={gameVersion}
+          loadVersions={(all) => api.listModVersions(instanceId, versionsFor.projectId, all)}
+          installVersion={(versionId) => api.installMod(instanceId, versionsFor.projectId, versionId)}
+          onInstalled={(message) => {
+            setInstalledMsg((prev) => ({ ...prev, [versionsFor.projectId]: message }));
+            onInstalled();
+          }}
+          onClose={() => setVersionsFor(null)}
         />
       )}
     </div>
