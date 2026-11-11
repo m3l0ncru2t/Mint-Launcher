@@ -35,6 +35,19 @@ export function ModsPanel({ instanceId }: Props) {
 
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [search, setSearch] = useState("");
+  // Vanilla can't load mods at all, so the tab says so (and Browse Mods is off) instead of
+  // letting someone install mods that silently do nothing. Re-read every few seconds so it
+  // clears as soon as Fabric is added in the instance settings.
+  const [isVanilla, setIsVanilla] = useState(false);
+  useEffect(() => {
+    const check = () =>
+      api
+        .getInstance(instanceId)
+        .then((inst) => setIsVanilla(inst?.loader === "vanilla"))
+        .catch(() => {});
+    check();
+    return setVisibleInterval(check, 5000);
+  }, [instanceId]);
   const [adding, setAdding] = useState<string | null>(null);
 
   async function handleJarDrop(jars: DroppedJar[], rejected: string[]) {
@@ -300,7 +313,12 @@ export function ModsPanel({ instanceId }: Props) {
           onKeyDown={(e) => e.key === "Escape" && setSearch("")}
         />
         <div className="panel-actions">
-          <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
+          <button
+            className="primary-btn small"
+            onClick={() => setShowBrowse(true)}
+            disabled={isVanilla}
+            title={isVanilla ? "Vanilla instances can't load mods - add Fabric first" : undefined}
+          >
             Browse Mods
           </button>
           <button className="ghost-btn small" onClick={() => setCreatingGroup(true)} title="Make a group to organise mods into">
@@ -314,6 +332,12 @@ export function ModsPanel({ instanceId }: Props) {
           </button>
         </div>
       </div>
+      {isVanilla && (
+        <div className="shader-notice mods-loader-notice">
+          This is a Vanilla instance, so mods won't load. Add Fabric under ⚙ Instance settings → Mod loader
+          to use them.
+        </div>
+      )}
       <div ref={drop.ref} className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
         {drop.active && <div className="file-drop-hint">Drop .jar files to add them</div>}
         {adding && <div className="placeholder">{adding}</div>}

@@ -373,16 +373,9 @@ export function InstanceDetail({
     }
   }, [logLines]);
 
-  // A launch failure or a non-zero exit almost always means something worth
-  // reading went to the console - pop it open automatically instead of
-  // leaving the user to notice it's hidden.
-  useEffect(() => {
-    if (progress?.stage === "error") {
-      setShowConsole(true);
-    } else if (isCrashExit(progress)) {
-      setShowConsole(true);
-    }
-  }, [progress]);
+  // The console stays hidden until the user opens it with Show - it never
+  // opens by itself, not even after a failed launch or a crash (the progress
+  // card still shows the error and any crash hint).
 
   async function handlePlay(serverAddress?: string) {
     setStarting(true);

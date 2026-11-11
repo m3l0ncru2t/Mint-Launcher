@@ -199,7 +199,7 @@ export function remoteApi(link: RemoteServerLink, onTokenRefreshed?: (token: str
      * (403 otherwise) - see Settings > Remote Admin on the host. */
     listFiles: (path: string) =>
       request(`/files?path=${encodeURIComponent(path)}`).then(
-        (r) => r.json() as Promise<{ name: string; isDir: boolean; size: number }[]>,
+        (r) => r.json() as Promise<{ name: string; isDir: boolean; size: number; modifiedAt?: number | null }[]>,
       ),
 
     readFile: (path: string) =>

@@ -961,6 +961,8 @@ struct FileEntry {
     name: String,
     is_dir: bool,
     size: u64,
+    /// Unix millis - lets the Logs tab list newest first. Older hosts don't send it.
+    modified_at: Option<u64>,
 }
 
 const MAX_LISTED_ENTRIES: usize = 5000;
@@ -997,6 +999,11 @@ async fn list_files(
             name: entry.file_name().to_string_lossy().into_owned(),
             is_dir: meta.is_dir(),
             size: if meta.is_dir() { 0 } else { meta.len() },
+            modified_at: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64),
         });
     }
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -1032,6 +1039,24 @@ async fn read_file(
         return Err((StatusCode::BAD_REQUEST, "Not a file".to_string()));
     }
     let io_err = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    // Rotated logs (logs/2026-11-12-1.log.gz) - unpacked so the Logs tab can show them like latest.log.
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gz")) {
+        let size = std::fs::metadata(&path).map_err(io_err)?.len();
+        let (data, truncated) = tokio::task::spawn_blocking(move || read_gz_tail(&path))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|_| (StatusCode::UNSUPPORTED_MEDIA_TYPE, "This .gz file couldn't be unpacked".to_string()))?;
+        if data.iter().take(8192).any(|b| *b == 0) {
+            return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, "This looks like a binary file".to_string()));
+        }
+        return Ok(Json(FileContent {
+            content: String::from_utf8_lossy(&data).into_owned(),
+            size,
+            truncated,
+            // Saving would write plain text over the compressed file
+            editable: false,
+        }));
+    }
     let mut file = std::fs::File::open(&path).map_err(io_err)?;
     let size = file.metadata().map_err(io_err)?.len();
     let truncated = size > MAX_VIEW_BYTES;
@@ -1052,6 +1077,38 @@ async fn read_file(
         truncated,
         editable,
     }))
+}
+
+/// Stops unpacking after this much output, so a tiny "zip bomb" .gz can't keep the host busy -
+/// far more than any real rotated log.
+const MAX_GZ_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The last `MAX_VIEW_BYTES` of a gzipped file's unpacked text, and whether anything was cut off.
+fn read_gz_tail(path: &std::path::Path) -> std::io::Result<(Vec<u8>, bool)> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let mut reader = flate2::read::MultiGzDecoder::new(std::io::BufReader::new(file)).take(MAX_GZ_UNPACKED_BYTES);
+    let keep = MAX_VIEW_BYTES as usize;
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut truncated = false;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n]);
+        // Drop the front in big steps rather than on every chunk
+        if out.len() > keep * 2 {
+            out.drain(..out.len() - keep);
+            truncated = true;
+        }
+    }
+    if out.len() > keep {
+        out.drain(..out.len() - keep);
+        truncated = true;
+    }
+    Ok((out, truncated))
 }
 
 #[derive(Debug, Deserialize)]

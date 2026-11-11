@@ -453,8 +453,17 @@ button {
   background: var(--bg-2);
 }
 
-.account-menu-row.selected {
+/* The signed-in account - boxed so it stands out from the ones you can switch to */
+.account-menu-row {
+  border: 1px solid transparent;
+}
+
+.account-menu-row.selected,
+.account-menu-row.selected:hover {
   color: var(--text-0);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: var(--mint-500);
+  cursor: default;
 }
 
 .account-menu-row:not(.selected) {
@@ -2955,4 +2964,121 @@ button {
 .app-status-check:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+/* "Vanilla can't load mods" warning at the top of a Mods tab */
+.mods-loader-notice {
+  margin: 8px 10px 0;
+  flex-shrink: 0;
+}
+
+/* ---------- Narrow windows ----------
+   Rows that used to sit on one line and get cut off (or squeeze their text to
+   one word per line) when the window is shrunk now wrap onto a second line
+   instead, and the instance view scrolls rather than clipping when it's
+   short. Placed last so it wins over the earlier one-line rules. */
+
+/* Header: buttons wrap under/beside the name instead of crushing it to nothing */
+.instance-header {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+
+.instance-header-text {
+  flex: 1 1 140px;
+}
+
+.instance-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* "Minecraft is running" card: the CPU/memory stats drop below the text
+   rather than squeezing it into a one-word-wide column */
+.progress-card {
+  flex-shrink: 0;
+}
+
+.progress-card-row {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+
+.progress-card-main {
+  flex: 1 1 200px;
+}
+
+.server-resource-stats {
+  flex-wrap: wrap;
+  flex-shrink: 1;
+  min-width: 0;
+  row-gap: 6px;
+}
+
+/* Tabs wrap to a second row instead of running off the edge */
+.files-tab-bar {
+  flex-wrap: wrap;
+}
+
+.files-tab {
+  white-space: nowrap;
+}
+
+/* Mods / Resource Packs / Shaders toolbar */
+.panel-header {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.panel-header h4,
+.panel-header > .hint-inline {
+  white-space: nowrap;
+}
+
+.panel-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.panel-actions > button {
+  white-space: nowrap;
+}
+
+/* Console header (Copy / Show) */
+.log-console-bar {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Short windows: scroll the instance view instead of cutting off whatever is
+   at the bottom, keeping the mods list a usable height */
+.instance-body,
+.instance-body-spacious {
+  overflow-y: auto;
+}
+
+.mods-panel {
+  min-height: 240px;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    grid-template-columns: 220px 1fr;
+  }
+
+  /* "Mint Launcher" + Support, and the version + Check for updates row,
+     wrap rather than spill past the narrower sidebar */
+  .sidebar-header,
+  .app-status-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .instance-header {
+    padding: 16px 16px 12px;
+  }
+
+  .instance-body {
+    padding: 14px 16px;
+  }
 }

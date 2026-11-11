@@ -35,7 +35,7 @@ interface Props {
   spaciousView: boolean;
 }
 
-type Tab = "mods" | "resourcepacks" | "console" | "chat" | "players" | "server" | "files";
+type Tab = "mods" | "resourcepacks" | "configs" | "logs" | "console" | "chat" | "players" | "server" | "files";
 
 /// A parallel, remote-only detail view rather than a "local vs. remote"
 /// branch threaded through InstanceDetail/ServerConsolePanel/PlayersPanel -
@@ -88,13 +88,14 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
         : null
     : null;
   // Owner-controlled (Settings > Remote Admin on the host) - gates the raw
-  // console input and the Files tab, which the host refuses otherwise.
+  // console input and the Configs/Logs/Files tabs, which the host refuses otherwise
+  // (configs can hold tokens/passwords and logs hold players' IPs).
   const [fullAccess, setFullAccess] = useState(false);
 
   // The owner can switch full access off while an admin is mid-session - fall
   // back to the console rather than leaving a blank Files tab selected.
   useEffect(() => {
-    if (!fullAccess && tab === "files") setTab("console");
+    if (!fullAccess && (tab === "files" || tab === "configs" || tab === "logs")) setTab("console");
   }, [fullAccess, tab]);
   const [players, setPlayers] = useState<{ online: number; max: number; sample: PlayerSample[] } | null>(null);
   const [stats, setStats] = useState<{
@@ -432,6 +433,16 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             >
               Resource Packs
             </button>
+            {fullAccess && (
+              <>
+                <button className={`files-tab${tab === "configs" ? " active" : ""}`} onClick={() => setTab("configs")}>
+                  Configs
+                </button>
+                <button className={`files-tab${tab === "logs" ? " active" : ""}`} onClick={() => setTab("logs")}>
+                  Logs
+                </button>
+              </>
+            )}
             <button className={`files-tab${tab === "console" ? " active" : ""}`} onClick={() => setTab("console")}>
               Console
             </button>
@@ -470,6 +481,28 @@ export function RemoteInstanceDetail({ link, onRemove, onLinkUpdated, spaciousVi
             />
           )}
           {tab === "files" && fullAccess && <RemoteFilesTab link={link} onTokenRefreshed={onTokenRefreshed} />}
+          {tab === "configs" && fullAccess && (
+            <RemoteFilesTab
+              key="configs"
+              link={link}
+              onTokenRefreshed={onTokenRefreshed}
+              root="config"
+              rootLabel="Configs"
+              missingText="No config folder yet - mods usually create their configs the first time the server runs."
+            />
+          )}
+          {tab === "logs" && fullAccess && (
+            <RemoteFilesTab
+              key="logs"
+              link={link}
+              onTokenRefreshed={onTokenRefreshed}
+              root="logs"
+              rootLabel="Logs"
+              readOnly
+              newestFirst
+              missingText="No logs yet - one shows up here the first time the server runs."
+            />
+          )}
           {tab === "players" && (
             <RemotePlayersTab link={link} onTokenRefreshed={onTokenRefreshed} players={players} running={running} />
           )}
@@ -718,7 +751,12 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
           onKeyDown={(e) => e.key === "Escape" && setSearch("")}
         />
         <div className="panel-actions">
-          <button className="primary-btn small" onClick={() => setShowBrowse(true)}>
+          <button
+            className="primary-btn small"
+            onClick={() => setShowBrowse(true)}
+            disabled={link.loader === "vanilla"}
+            title={link.loader === "vanilla" ? "This server runs Vanilla, which can't load mods" : undefined}
+          >
             Browse Mods
           </button>
           <button className="ghost-btn small" onClick={() => setCreatingGroup(true)} title="Make a group to organise mods into">
@@ -743,6 +781,11 @@ function RemoteModsTab({ link, onTokenRefreshed }: { link: RemoteServerLink; onT
           />
         </div>
       </div>
+      {link.loader === "vanilla" && (
+        <div className="shader-notice mods-loader-notice">
+          This server runs Vanilla, so mods won't load. Its host needs to add Fabric first.
+        </div>
+      )}
       <div ref={drop.ref} className={`mods-list${drop.active ? " file-drop-active" : ""}`} {...drop.props}>
         {drop.active && <div className="file-drop-hint">Drop .jar files to upload them</div>}
         {loading && <div className="placeholder">Loading…</div>}
@@ -1408,19 +1451,37 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/// Read-only browser for the whole server folder - only works when the host's
-/// owner turned on "full access" for admins (see Settings > Remote Admin on
-/// the host); otherwise the host answers 403 and that message is shown as-is.
+/// Browser for the server folder - only works when the host's owner turned on
+/// "full access" for admins (see Settings > Remote Admin on the host);
+/// otherwise the host answers 403 and that message is shown as-is. With `root`
+/// it's the Configs or Logs tab: starts in that folder and can't go above it.
 function RemoteFilesTab({
   link,
   onTokenRefreshed,
+  root,
+  rootLabel = "Server files",
+  readOnly = false,
+  newestFirst = false,
+  missingText,
 }: {
   link: RemoteServerLink;
   onTokenRefreshed: (token: string) => void;
+  /** Folder (relative to the server folder) the browser is locked to. */
+  root?: string;
+  rootLabel?: string;
+  /** Hide Edit - for logs, which the server keeps writing to. */
+  readOnly?: boolean;
+  /** Sort files by last change, newest first (falls back to name, newest first, on hosts that don't send times). */
+  newestFirst?: boolean;
+  /** Shown instead of the host's "No such file or folder" when `root` doesn't exist yet. */
+  missingText?: string;
 }) {
   const api = remoteApi(link, onTokenRefreshed);
   const [segments, setSegments] = useState<string[]>([]);
-  const [entries, setEntries] = useState<{ name: string; isDir: boolean; size: number }[] | null>(null);
+  const [entries, setEntries] = useState<
+    { name: string; isDir: boolean; size: number; modifiedAt?: number | null }[] | null
+  >(null);
+  const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{
     name: string;
@@ -1434,17 +1495,34 @@ function RemoteFilesTab({
   const [saving, setSaving] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
 
-  const currentPath = segments.join("/");
+  const currentPath = [...(root ? [root] : []), ...segments].join("/");
 
   useEffect(() => {
     let cancelled = false;
     setEntries(null);
     setError(null);
+    setMissing(false);
     setViewing(null);
     api
       .listFiles(currentPath)
-      .then((list) => !cancelled && setEntries(list))
-      .catch((e) => !cancelled && setError(String(e).replace(/^Error: /, "")));
+      .then((list) => {
+        if (cancelled) return;
+        if (newestFirst) {
+          list = [...list].sort(
+            (a, b) =>
+              Number(b.isDir) - Number(a.isDir) ||
+              (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0) ||
+              b.name.localeCompare(a.name),
+          );
+        }
+        setEntries(list);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const msg = String(e).replace(/^Error: /, "");
+        if (root && missingText && segments.length === 0 && msg.includes("No such file or folder")) setMissing(true);
+        else setError(msg);
+      });
     return () => {
       cancelled = true;
     };
@@ -1504,7 +1582,7 @@ function RemoteFilesTab({
               </>
             ) : (
               <>
-                {viewing.editable && (
+                {viewing.editable && !readOnly && (
                   <button className="ghost-btn small" onClick={() => setDraft(viewing.content)}>
                     Edit
                   </button>
@@ -1539,7 +1617,7 @@ function RemoteFilesTab({
       <div className="panel-header">
         <h4>
           <a style={{ cursor: "pointer" }} onClick={() => setSegments([])}>
-            Server files
+            {rootLabel}
           </a>
           {segments.map((seg, i) => (
             <span key={i}>
@@ -1560,7 +1638,8 @@ function RemoteFilesTab({
       </div>
       <div className="mods-list">
         {error && <div className="error-text">{error}</div>}
-        {!error && entries === null && <div className="placeholder">Loading…</div>}
+        {missing && <div className="placeholder">{missingText}</div>}
+        {!error && !missing && entries === null && <div className="placeholder">Loading…</div>}
         {entries?.length === 0 && <div className="placeholder">This folder is empty.</div>}
         {entries?.map((entry) => (
           <div
@@ -1573,6 +1652,9 @@ function RemoteFilesTab({
                 {entry.name}
                 {entry.isDir ? "/" : ""}
               </span>
+              {newestFirst && !entry.isDir && entry.modifiedAt && (
+                <span className="mod-filename">{new Date(entry.modifiedAt).toLocaleString()}</span>
+              )}
             </div>
             {opening === entry.name && <span className="spinner-small" />}
             {!entry.isDir && <span className="mod-size">{formatFileSize(entry.size)}</span>}
